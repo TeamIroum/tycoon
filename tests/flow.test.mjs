@@ -155,6 +155,74 @@ test('확인 전에는 월 진행 불가, 사건 중에는 다음 단계로 못 
   assert.equal(f.view().project.delivered.bedding, 8);
 });
 
+test('F-09 계약 없는 월 진행·납품 시작과 잘못된 단계의 납품은 상태를 바꾸지 않는다', () => {
+  const f = start(); checks(f, true);
+  assert.equal(f.delivery.start().ok, false);
+  f.state.setCurrentDate({ month: 2, phase: 'PLAN', pending: null });
+  assert.equal(d(f, 'ADVANCE_MONTH').ok, false);
+  assert.equal(f.delivery.start().ok, false);
+  assert.equal(f.state.getProjectStatus(), 'REVIEWING');
+  assert.equal(f.state.getDelivery(), null);
+});
+
+test('F-09 계약 후 납품 시작은 계약 수량·ID와 납품 정보를 일치시키고 중복 시작을 막는다', () => {
+  const f = start(); checks(f, true);
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH']) assert.ok(d(f, command).ok, command);
+  const contract = f.state.getContract();
+  const delivery = f.state.getDelivery();
+  assert.equal(f.state.getProjectStatus(), 'DELIVERING');
+  assert.equal(delivery.contractId, contract.id);
+  assert.deepEqual(delivery.delivered.map((item) => item.itemId).sort(), contract.items.map((item) => item.itemId).sort());
+  assert.equal(delivery.delivered.find((item) => item.itemId === 'mattress').quantity, contract.items.find((item) => item.itemId === 'mattress').quantity);
+  assert.equal(delivery.delivered.find((item) => item.itemId === 'bedding').quantity, 5);
+  assert.equal(f.delivery.start().ok, false);
+  assert.equal(f.state.getDelivery().contractId, contract.id);
+});
+
+test('F-10 사건 순서·중복 대응을 거부하고 두 대응 후 잔여 침구를 납품한다', () => {
+  const f = start(); checks(f, true);
+  const events = [];
+  f.state.on(TYCOON.core.RESULT_EVENTS.DELIVERY_ISSUE_FOUND, (payload) => events.push(['found', payload.issue.actual]));
+  f.state.on(TYCOON.core.RESULT_EVENTS.DELIVERY_ISSUE_RESOLVED, (payload) => events.push(['resolved', payload.issue.actual]));
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH']) assert.ok(d(f, command).ok, command);
+  assert.deepEqual(events, [['found', 5]]);
+  assert.equal(d(f, 'EVENT_CONFIRM_REQUESTER').ok, true);
+  assert.equal(d(f, 'EVENT_CONFIRM_REQUESTER').ok, false);
+  assert.equal(f.view().pending, 'PARTIAL_DELIVERY');
+  assert.equal(d(f, 'ADVANCE_MONTH').ok, false);
+  assert.equal(d(f, 'CONFIRM_INSPECTION').ok, false);
+  assert.equal(d(f, 'EVENT_NEGOTIATE_SUPPLIER').ok, true);
+  assert.equal(f.view().pending, 'INSPECTION');
+  assert.equal(f.state.getProjectStatus(), 'INSPECTING');
+  assert.equal(f.state.getDelivery().delivered.find((item) => item.itemId === 'bedding').quantity,
+    f.state.getContract().items.find((item) => item.itemId === 'bedding').quantity);
+  assert.deepEqual(events, [['found', 5], ['resolved', 5]]);
+  assert.equal(d(f, 'EVENT_NEGOTIATE_SUPPLIER').ok, false);
+});
+
+test('F-11 검사 목표는 계약 수량과 실제 필요량 중 큰 값이며 검사 후 재검사를 막는다', () => {
+  const f = start(); checks(f, true);
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH', 'EVENT_NEGOTIATE_SUPPLIER', 'EVENT_CONFIRM_REQUESTER']) assert.ok(d(f, command).ok, command);
+  const contract = f.state.getContract();
+  const mattress = contract.items.find((item) => item.itemId === 'mattress');
+  mattress.quantity = 16;
+  f.state.setContract(contract);
+  const delivery = f.state.getDelivery();
+  delivery.delivered = delivery.delivered.map((item) => item.itemId === 'mattress' ? { ...item, quantity: 12 } : item);
+  f.state.setDelivery(delivery);
+  const budgetBefore = f.state.getBudget();
+  assert.ok(d(f, 'CONFIRM_INSPECTION').ok);
+  const inspected = f.state.getDelivery();
+  assert.equal(inspected.delivered.find((item) => item.itemId === 'mattress').quantity, 16);
+  assert.equal(inspected.supplement.mattress, 4);
+  assert.equal(inspected.supplement.amount, 36);
+  assert.equal(inspected.inspection.quantityPassed, true);
+  assert.equal(f.state.getBudget(), budgetBefore - 36);
+  assert.equal(d(f, 'CONFIRM_INSPECTION').ok, false);
+  assert.equal(f.state.getBudget(), budgetBefore - 36);
+  assert.equal(f.state.getDelivery().delivered.find((item) => item.itemId === 'mattress').quantity, 16);
+});
+
 test('후보 3명: 강점과 전문 분야가 겹치지 않고, 두 명은 선발할 수 없음', () => {
   for (let seed = 1; seed < 30; seed++) {
     const f = start(seed);
@@ -237,6 +305,73 @@ test('D 평가 미통과: 시설·정원·후보·채용·사용 개시를 차�
   assert.ok(d(f,'CLOSE_REPORT').ok); assert.equal(f.view().phase,'END'); assert.equal(f.state.getCandidates(),null);
   assert.ok(!f.view().reports[0].lines.some((line) => line.startsWith('사용 개시:')));
   assert.equal(f.recruit.hire('C01').ok,false);
+});
+
+test('F-12 평가는 결과를 저장하고 이벤트를 한 번만 내며 재평가를 거부한다', () => {
+  const f = start(); checks(f, true);
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH', 'EVENT_NEGOTIATE_SUPPLIER', 'EVENT_CONFIRM_REQUESTER']) assert.ok(d(f, command).ok, command);
+  const grades = [], evaluations = [];
+  f.state.on(TYCOON.core.RESULT_EVENTS.GRADE_CALCULATED, (payload) => grades.push(payload));
+  f.state.on(TYCOON.core.EVENTS.EVALUATION_CHANGED, (payload) => evaluations.push(payload));
+  assert.ok(d(f, 'CONFIRM_INSPECTION').ok);
+  const stored = f.state.getEvaluation();
+  assert.equal(stored.grade, 'S');
+  assert.equal(stored.passed, true);
+  assert.equal(f.state.getProjectStatus(), 'COMPLETED');
+  assert.deepEqual(grades, [{ grade: stored.grade, reason: stored.reason }]);
+  assert.equal(evaluations.length, 1);
+  assert.deepEqual(f.state.getEvaluation(), stored);
+  assert.equal(f.evaluation.calculateGrade().reason, 'INVALID_STATE');
+  assert.equal(grades.length, 1);
+  assert.deepEqual(f.state.getEvaluation(), stored);
+});
+
+test('F-13 시설 개선 실패·완료·중복 경로와 변경 이벤트를 검증한다', () => {
+  const failed = start();
+  assert.equal(failed.facility.improveFacility('hall').reason, 'INVALID_STATE');
+  assert.deepEqual(failed.state.getFacilityState('hall'), { stage: 'BEFORE' });
+
+  const f = start(); checks(f, true);
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH', 'EVENT_NEGOTIATE_SUPPLIER', 'EVENT_CONFIRM_REQUESTER']) assert.ok(d(f, command).ok, command);
+  const changes = [], results = [];
+  f.state.on(TYCOON.core.EVENTS.FACILITY_CHANGED, (payload) => changes.push(payload));
+  f.state.on(TYCOON.core.RESULT_EVENTS.FACILITY_IMPROVED, (payload) => results.push(payload));
+  assert.ok(d(f, 'CONFIRM_INSPECTION').ok);
+  assert.deepEqual(f.state.getFacilityState('hall'), { stage: 'IMPROVED' });
+  assert.equal(f.state.getProjectStatus(), 'COMPLETED');
+  assert.deepEqual(changes, [{ facilityId: 'hall', state: { stage: 'IMPROVED' } }]);
+  assert.deepEqual(results, [{ facilityId: 'hall', stage: 'IMPROVED' }]);
+  assert.equal(f.facility.improveFacility('hall').ok, false);
+  assert.equal(changes.length, 1);
+  assert.equal(results.length, 1);
+});
+
+test('F-14 정원 승인과 후보 공개는 통과 평가 뒤 한 번만 수행되고 후보 1명만 채용된다', () => {
+  const f = start(); checks(f, true);
+  for (const command of ['ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH', 'EVENT_NEGOTIATE_SUPPLIER', 'EVENT_CONFIRM_REQUESTER', 'CONFIRM_INSPECTION']) assert.ok(d(f, command).ok, command);
+  assert.equal(f.state.getStaff().headcount, 1);
+  assert.ok(f.recruit.approveHeadcount().ok);
+  assert.deepEqual(f.state.getStaff(), { headcount: 2, seats: 2, hired: [] });
+  assert.equal(f.recruit.approveHeadcount().reason, 'ALREADY_DONE');
+  const generated = f.recruit.ensureCandidates();
+  assert.deepEqual(generated, { ok: true, created: true });
+  const candidates = f.state.getCandidates();
+  assert.equal(candidates.length, 3);
+  assert.equal(new Set(candidates.map(topAbility)).size, 3);
+  assert.equal(new Set(candidates.map((candidate) => candidate.specialty)).size, 3);
+  assert.ok(candidates.every((candidate) => ['review', 'tech', 'coordinate', 'manage'].every((key) => Number.isInteger(candidate.abilities[key])) && candidate.specialty && candidate.trait));
+  assert.deepEqual(f.recruit.ensureCandidates(), { ok: true, created: false });
+  assert.deepEqual(f.state.getCandidates(), candidates);
+
+  const hiredEvents = [];
+  f.state.on(TYCOON.core.RESULT_EVENTS.CANDIDATE_HIRED, (payload) => hiredEvents.push(payload));
+  assert.equal(f.recruit.hire('OUTSIDE_POOL').reason, 'NOT_FOUND');
+  const selected = candidates[0];
+  assert.ok(f.recruit.hire(selected.id).ok);
+  assert.equal(f.recruit.hire(selected.id).reason, 'ALREADY_DONE');
+  assert.equal(f.recruit.hire(candidates[1].id).reason, 'ALREADY_DONE');
+  assert.deepEqual(f.state.getStaff(), { headcount: 2, seats: 2, hired: [selected] });
+  assert.deepEqual(hiredEvents, [{ candidateId: selected.id }]);
 });
 test('D-1 점검 생략 TEMP 보완: 매트 2개, 18만원, 최종 수량·규격 통과', () => {
   const f=start(); checks(f,false);

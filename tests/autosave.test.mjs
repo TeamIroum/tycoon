@@ -39,6 +39,35 @@ test('F-18 autosave: successful flow commands persist GameState and meta; restor
   assert.deepEqual(resumed.meta, flow.meta);
 });
 
+test('F-18 auto-save restores the same F-14 candidates and hired colleague', () => {
+  const storage = memoryStorage();
+  const flow = new TutorialFlow();
+  const save = new BrowserSave({ storage });
+  save.attach(flow);
+  flow.newGame();
+  const dispatch = (command, payload) => {
+    const result = flow.dispatch(command, payload);
+    assert.equal(result.ok, true, command);
+    return result;
+  };
+  for (const command of ['CHECK_RESIDENTS', 'CHECK_USER_SPEC', 'CHECK_INVENTORY_COUNT', 'CHECK_MATTRESS_CONDITION', 'CONFIRM_QUANTITIES', 'ADVANCE_MONTH', 'SIGN_CONTRACT', 'CLOSE_REPORT', 'ADVANCE_MONTH', 'EVENT_NEGOTIATE_SUPPLIER', 'EVENT_CONFIRM_REQUESTER', 'CONFIRM_INSPECTION', 'CLOSE_REPORT']) dispatch(command);
+
+  const candidates = flow.state.getCandidates();
+  assert.equal(candidates.length, 3);
+  const resumedCandidates = new TutorialFlow();
+  assert.deepEqual(new BrowserSave({ storage }).restore(resumedCandidates), { ok: true });
+  assert.deepEqual(resumedCandidates.state.getCandidates(), candidates);
+  assert.deepEqual(resumedCandidates.state.getStaff(), flow.state.getStaff());
+
+  dispatch('HIRE', { candidateId: candidates[0].id });
+  const hired = flow.state.getStaff();
+  const resumedHire = new TutorialFlow();
+  assert.deepEqual(new BrowserSave({ storage }).restore(resumedHire), { ok: true });
+  assert.deepEqual(resumedHire.state.getCandidates(), candidates);
+  assert.deepEqual(resumedHire.state.getStaff(), hired);
+  assert.deepEqual(resumedHire.state.getStaff().hired, [candidates[0]]);
+});
+
 test('F-18 failed commands and fatal state do not overwrite the last valid save', () => {
   const storage = memoryStorage();
   const flow = new TutorialFlow();
