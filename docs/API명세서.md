@@ -120,6 +120,32 @@ GameState의 저장 관련 메서드는 데이터 직렬화와 복원을 담당�
 
 `toJSON()`은 저장할 데이터를 반환할 뿐, 브라우저 저장소에 직접 기록하지 않는다. `load()` 역시 전달받은 저장 데이터를 복원하는 기능이다. `BrowserSave`는 버전이 있는 단일 localStorage 슬롯에 GameState JSON과 TutorialFlow meta(힌트 설정·대화 이력)를 함께 기록하고, 시작 시 검증 후 복원한다.
 
+**저장 시점과 복원 정책 (F-18 확정)**
+
+- `attach(flow, onStatus)`는 `TutorialFlow.subscribe()`로 등록된다. `TutorialFlow`는 성공한 명령과 `newGame()` 뒤에만 구독자를 호출하므로, 실패·롤백된 명령은 저장되지 않는다.
+- `GAME_STARTED`(새 게임)이면 `reset()`으로 기존 슬롯을 지우고 새 게임 상태를 기록한다. 그 밖의 성공 명령(`SET_HINTS`, `MARK_DIALOG_SEEN` 포함)은 `save()`로 현재 상태를 덮어쓴다.
+- `flow.fatal`이 있으면 기록하지 않고 상태를 `FATAL`로 둔다.
+- 시작 시 `restore(flow)`는 저장된 상태를 `GameState.load()`로 불러오고 meta를 교체할 뿐 명령을 다시 실행하지 않는다. 따라서 마지막 성공 명령 이후의 상태(월중 포함)로 복원되며, 계약 예산·평가·채용 결과가 중복 적용되지 않는다. 같은 기록을 여러 번 복원해도 결과가 같다.
+- 손상(`CORRUPTED`)·버전 불일치(`VERSION_MISMATCH`) 기록은 폐기하고 초기 상태로 시작한다.
+
+**저장 상태 (`TYCOON.app.saveStatus`)**
+
+- `TYCOON.app.autoSave`는 `BrowserSave` 인스턴스이며, `autoSave.lastResult`는 마지막 `restore`/`save`/`reset` 결과다.
+- `TYCOON.app.saveStatus`는 시작 시 `restore()` 결과로 설정되고, 이후 `attach()`의 `onStatus` 콜백으로 매 저장 시도 뒤 `lastResult`와 같은 값으로 갱신된다.
+- 형식: 성공 `{ ok: true }`, 실패 `{ ok: false, reason, error?, cleared? }`.
+
+| reason | 발생 시점 | 의미 |
+|---|---|---|
+| `EMPTY` | 복원 | 저장 기록 없음(실패가 아님) |
+| `CORRUPTED`, `VERSION_MISMATCH` | 복원 | 기록을 폐기함. `cleared`는 삭제 성공 여부 |
+| `STORAGE_UNAVAILABLE` | 복원·저장 | `localStorage`에 접근할 수 없음 |
+| `READ_FAILED` | 복원 | 읽기 예외 |
+| `WRITE_FAILED` | 저장 | 쓰기 예외(용량 초과 등). 게임은 계속되고 다음 성공 명령에서 다시 저장을 시도함 |
+| `CLEAR_FAILED` | 삭제 | `remove()`의 삭제 예외. `reset()`·폐기 처리에서는 이어지는 저장 결과 또는 `cleared: false`로 대체되어 보통 `saveStatus`에 남지 않음 |
+| `FATAL` | 저장 | fatal 상태라 기록하지 않음 |
+
+UI는 `saveStatus`를 읽어 표시만 하며 `localStorage`를 직접 다루지 않는다.
+
 `load()`는 사업·업체·계약(필수 `specs` 포함)·납품·평가(`passed` 필수 boolean)·시설·직원·후보를 검증한다. 잘못된 저장은 `CORRUPTED`를 반환하며 기존 상태와 이벤트를 변경하지 않는다. 채용된 후보 ID는 후보 목록이 비어 있지 않아 참조 근거가 있을 때 검사한다. `null`/빈 후보 목록은 유효하다. `staff.hired`의 중복 ID와 알려진 후보 집합에 없는 ID는 거부한다.
 
 ### 후보 데이터의 저장 및 복원

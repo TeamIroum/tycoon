@@ -44,7 +44,8 @@
 ### 저장
 
 - F-18은 GameState 직렬화와 브라우저 저장소 연동을 구분한다. `src/core/BrowserSave.js`가 단일 `localStorage` 슬롯의 자동 저장·복원을 담당한다.
-- 성공한 진행 명령 이후 저장한다. 실패·롤백·fatal을 정상 상태로 저장하지 않는다.
+- 새 게임 시작 시 기존 저장을 교체하고, 성공한 진행 명령마다 저장한다. 실패·롤백·fatal을 정상 상태로 저장하지 않는다.
+- 새로고침 시 마지막으로 성공한 명령 이후의 상태로 복원한다(월중 포함). 복원은 명령을 다시 실행하지 않는다.
 - 저장 실패는 게임 진행을 막지 않고 `saveStatus`를 통해 UI에 전달한다. UI에서 `localStorage`를 직접 다루지 않는다.
 
 ## 5. 담당 파일과 협의
@@ -69,7 +70,7 @@
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/play-walkthrough-cdp.mjs
 ```
 
-기록된 기준은 Node 60개, Chromium CDP 4개 경로, UI E2E 10개 시나리오 통과다. 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
+테스트 개수는 변경될 수 있으므로 위 명령의 실제 출력을 기준으로 보고한다(2026-11-12 기준 Node 79개, Chromium CDP 4개 경로, UI E2E 10개 시나리오 통과). 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
 
 완료 보고에는 목적, 수정 파일별 변경, 실행 명령과 통과·실패·미실행 수, 브라우저 입력 방식, 미해결 위험을 적는다.
 
