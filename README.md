@@ -6,7 +6,7 @@
 
 프로젝트 루트의 `index.html`을 브라우저에서 더블클릭해 실행합니다. 별도 설치, 서버, 빌드 과정은 필요하지 않습니다. 최신 Chrome 또는 Edge를 권장합니다. 게임 진행은 F-18 브라우저 자동 저장을 통해 새로고침 후 복원됩니다.
 
-제출용 진입 파일은 `submission/게임실행.html`입니다. 오프라인 실행본을 포함한 제출 ZIP은 별도 생성물이며, F-19 ZIP 생성과 독립 실행 검증은 완료했습니다. 실제 공모전 제출과 GitHub Pages 배포는 완료되지 않았습니다.
+제출용 진입 파일은 `submission/게임실행.html`입니다. 제출 ZIP은 별도 생성물이며, 기본 ZIP(Pages 연결)과 오프라인 ZIP(오프라인 실행본 포함) 모두 압축 해제 후 브라우저 실행을 자동 검증합니다. 실제 공모전 제출은 완료되지 않았습니다.
 
 ## 게임 진행
 
@@ -20,8 +20,8 @@
 ## 현재 구현 및 테스트 기준
 
 - F-18: 새 게임 시작과 성공한 진행 명령마다 단일 `localStorage` 슬롯에 자동 저장하고, 새로고침 시 마지막으로 성공한 명령 이후의 상태(월중 포함)로 복원합니다. 실패한 명령은 저장하지 않습니다. 저장 실패는 게임 입력을 막지 않는 안내로 표시하며 다음 성공 명령에서 다시 저장합니다.
-- F-19: 오프라인 제출 ZIP 생성 및 외부 폴더 압축 해제 후 독립 실행 검증을 완료했습니다. 실제 제출과 Pages 배포는 미완료입니다.
-- 자동 테스트: 아래 [테스트 실행](#테스트-실행) 명령의 실제 출력을 기준으로 확인합니다. 테스트 개수는 변경될 수 있습니다(2026-11-12 기준 Node 79개, Chromium CDP 4개 경로, UI E2E 10개 시나리오 통과).
+- F-19: 기본 ZIP과 오프라인 ZIP을 만들고, 압축을 푼 뒤 `게임실행.html`을 Chromium(Chrome·Edge)에서 열어 검증합니다. 필수 파일이나 참조 경로가 빠지면 ZIP을 만들지 않습니다. 최종 팀명 반영과 실제 제출은 미완료입니다.
+- 자동 테스트: 아래 [테스트 실행](#테스트-실행) 명령의 실제 출력을 기준으로 확인합니다. 테스트 개수는 기능이 늘면 바뀌므로 완료 조건이 아니라 참고 기록입니다(2026-11-12 기준 Node 100개, Chromium CDP 4개 경로, UI E2E 10개 시나리오, 제출 ZIP 브라우저 검증 2종 통과).
 - Chrome headful: 전체 10개 시나리오 통과. Edge headful: 개별 시나리오는 통과했으나 전체 연속 실행은 불안정합니다. 자동화 러너 타이밍 문제와 게임 결함 여부는 아직 분리되지 않았습니다.
 
 ## 프로젝트 구조
@@ -38,7 +38,7 @@ src/                게임 코드(IIFE, 전역 TYCOON)
   scenes/           Phaser 장면
 docs/               기획·기능·API·분배·협업 문서
 tests/              자동 및 브라우저 테스트
-submission/         제출용 실행 파일과 오프라인 리소스
+submission/         제출용 실행 파일과 실행 안내(기본·오프라인)
 tools/              제출 ZIP 생성 도구
 ```
 
@@ -50,6 +50,12 @@ Windows PowerShell에서 프로젝트 루트 기준으로 실행합니다.
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/all.mjs
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/chromium-cdp.mjs
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/play-walkthrough-cdp.mjs
+```
+
+제출 ZIP을 바꿨다면 압축 해제 후 실행 검증도 실행합니다. Edge는 `$env:TYCOON_BROWSER`에 `msedge.exe` 경로를 지정합니다.
+
+```powershell
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/submission-cdp.mjs
 ```
 
 프로젝트는 `file://` 실행 방식을 유지하며 npm 빌드 시스템이나 별도 개발 서버를 사용하지 않습니다.
@@ -74,10 +80,16 @@ Windows PowerShell에서 프로젝트 루트 기준으로 실행합니다.
 
 ## 제출 패키지
 
-제출 ZIP은 다음 명령으로 생성합니다.
+제출 ZIP은 다음 명령으로 생성합니다. ZIP은 프로젝트 루트(또는 `--out-dir <폴더>`)에 만들어지며 Git 추적 대상이 아닙니다.
 
 ```powershell
-node tools/make-submission.mjs --with-offline
+node tools/make-submission.mjs --with-offline   # 오프라인 ZIP (권장)
+node tools/make-submission.mjs                  # 기본 ZIP (Pages 연결, 인터넷 필요)
 ```
 
-오프라인 실행본은 압축 해제 후 `오프라인_실행/index.html`에서 실행합니다. ZIP 파일명에 남은 팀명 자리표시자는 제출 전 확인이 필요합니다. 제출 전 실제 공모전의 파일명·형식·영상·개인정보·공개 범위 규정을 확인하세요. Pages 배포 주소는 <https://TeamIroum.github.io/tycoon/>이며, 실제 배포 여부는 별도로 확인해야 합니다.
+| ZIP | 들어 있는 파일 | `게임실행.html`을 더블클릭하면 |
+|---|---|---|
+| 오프라인 | `게임실행.html`, `실행안내.txt`, `오프라인_실행/`(`index.html`, `lib/`, `src/`) | 압축을 푼 `오프라인_실행/index.html`이 열림. 인터넷·서버 불필요 |
+| 기본 | `게임실행.html`, `실행안내.txt` | GitHub Pages 게임으로 이동. 인터넷 필요 |
+
+필수 파일이나 실행 파일이 참조하는 경로가 없으면 도구가 ZIP을 만들지 않고 실패합니다. ZIP 파일명에 남은 팀명 자리표시자는 만들 때마다 경고하며 제출 전 실제 팀명으로 바꿔야 합니다. 제출 전 실제 공모전의 파일명·형식·영상·개인정보·공개 범위 규정을 확인하세요. Pages 배포 주소는 <https://TeamIroum.github.io/tycoon/>입니다(2026-11-12 응답 확인). 배포본이 제출할 버전과 같은지는 제출 전에 확인해야 합니다.

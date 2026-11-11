@@ -41,3 +41,27 @@ export function makeZip(files) {
   end.writeUInt32LE(cdSize, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...local, ...central, end]);
 }
+
+/** makeZip이 만든 무압축 ZIP을 다시 읽는다(제출본 자체 검증용). 중앙 디렉터리·CRC가 맞지 않으면 예외. */
+export function readZip(zip) {
+  const end = zip.length - 22;
+  if (end < 0 || zip.readUInt32LE(end) !== 0x06054b50) throw new Error('ZIP 끝 레코드가 없습니다');
+  const count = zip.readUInt16LE(end + 10);
+  let p = zip.readUInt32LE(end + 16);
+  const files = [];
+  for (let i = 0; i < count; i++) {
+    if (zip.readUInt32LE(p) !== 0x02014b50) throw new Error('ZIP 중앙 디렉터리가 손상되었습니다');
+    const method = zip.readUInt16LE(p + 10), crc = zip.readUInt32LE(p + 16), size = zip.readUInt32LE(p + 20);
+    const nameLength = zip.readUInt16LE(p + 28), extra = zip.readUInt16LE(p + 30), comment = zip.readUInt16LE(p + 32);
+    const offset = zip.readUInt32LE(p + 42);
+    const name = zip.toString('utf8', p + 46, p + 46 + nameLength);
+    if (method !== 0) throw new Error(`무압축이 아닌 항목: ${name}`);
+    if (zip.readUInt32LE(offset) !== 0x04034b50) throw new Error(`로컬 헤더가 없습니다: ${name}`);
+    const start = offset + 30 + zip.readUInt16LE(offset + 26) + zip.readUInt16LE(offset + 28);
+    const data = zip.subarray(start, start + size);
+    if (crc32(data) !== crc) throw new Error(`CRC 불일치: ${name}`);
+    files.push({ name, data });
+    p += 46 + nameLength + extra + comment;
+  }
+  return files;
+}

@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <title>조달청 타이쿤</title>
 <!--
-  file://에서 실행하면 ZIP에 포함된 오프라인 게임을 연다.
-  웹 주소로 열면 GitHub Pages 게임으로 연결한다.
+  제출용 실행 파일. 기본은 GitHub Pages 게임으로 연결한다.
+  tools/make-submission.mjs --with-offline 으로 만든 ZIP에서만 OFFLINE_INCLUDED가 true가 되어,
+  file://로 열면 함께 들어 있는 오프라인_실행/index.html을 연다.
+  (이 저장소의 submission/ 폴더에는 오프라인 실행본이 없으므로 false를 유지한다.)
 -->
 <style>
   body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
@@ -17,16 +19,17 @@
 <body>
 <main>
   <h1>조달청 타이쿤</h1>
-  <p>게임 페이지로 이동하는 중입니다. 인터넷 연결이 필요합니다.</p>
+  <p>게임 페이지로 이동하는 중입니다. 오프라인 실행본이 없는 제출본은 인터넷 연결이 필요합니다.</p>
   <p>자동으로 열리지 않으면 아래 주소를 누르세요.<br>
      <a id="game-link" href="https://TeamIroum.github.io/tycoon/">https://TeamIroum.github.io/tycoon/</a></p>
 </main>
 <script>
+  var OFFLINE_INCLUDED = false;
   var GAME_URL = 'https://TeamIroum.github.io/tycoon/';
   var offlineUrl = new URL('오프라인_실행/index.html', location.href);
   offlineUrl.search = location.search;
   var OFFLINE_GAME_URL = offlineUrl.href;
-  location.replace(location.protocol === 'file:' ? OFFLINE_GAME_URL : GAME_URL);
+  location.replace(OFFLINE_INCLUDED && location.protocol === 'file:' ? OFFLINE_GAME_URL : GAME_URL);
 </script>
 </body>
 </html>
