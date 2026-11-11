@@ -65,6 +65,81 @@ test('계약은 1순위와 한 번만, 예산은 한 번만 차감', () => {
   assert.equal(f.state.getBudget(), budget);
 });
 
+test('F-06 필수 자격 조건은 각각 위반 시 부적격 사유를 돌려주고 적격 업체가 남는다', () => {
+  const f = start(); checks(f, true); d(f, 'ADVANCE_MONTH');
+  const project = f.state.getCurrentProject();
+  const base = f.state.getSuppliers().find((supplier) => supplier.id === 'S1');
+  assert.equal(f.procurement.checkEligibility(base, project).eligible, true);
+
+  const cases = [
+    [{ ...base, price: Math.min(f.state.getBudget(), project.budgetLimit) + 1 }, '예산 초과'],
+    [{ ...base, specs: base.specs.filter((spec) => spec !== project.requiredSpecs[0]) }, `필수 규격 미충족: ${project.requiredSpecs[0]}`],
+    [{ ...base, capacity: { ...base.capacity, mattress: project.shortage.mattress - 1 } }, '요청 수량 공급 불가'],
+    [{ ...base, deliveryDays: TYCOON.config.BALANCE.deadlineDays + 1 }, '납품 기한 초과']
+  ];
+  for (const [supplier, expectedReason] of cases) {
+    const result = f.procurement.checkEligibility(supplier, project);
+    assert.equal(result.eligible, false, expectedReason);
+    assert.ok(result.reasons.includes(expectedReason), expectedReason);
+  }
+  assert.ok(f.compareSuppliers().rows.some((row) => row.eligible));
+});
+
+test('F-07 비교는 부적격 업체를 점수·순위·선정에서 제외하고 근거와 순서를 재현한다', () => {
+  const f = start(); checks(f, true); d(f, 'ADVANCE_MONTH');
+  const first = f.compareSuppliers();
+  const second = f.compareSuppliers();
+  assert.deepEqual(second, first);
+  const rejected = first.rows.find((row) => row.id === 'S2');
+  assert.equal(rejected.eligible, false);
+  assert.equal(rejected.score, null);
+  assert.equal(rejected.scoreParts, null);
+  assert.ok(rejected.reasons.some((reason) => reason.startsWith('필수 규격 미충족')));
+  const ranked = first.rows.filter((row) => row.eligible).sort((a, b) => b.score - a.score);
+  assert.equal(first.winnerId, ranked[0].id);
+  for (const row of ranked) {
+    assert.deepEqual(Object.keys(row.scoreParts).sort(), ['delivery', 'price', 'quality']);
+    assert.equal(row.score, Math.round((row.scoreParts.price + row.scoreParts.quality + row.scoreParts.delivery) * 10) / 10);
+  }
+});
+
+test('F-07 동점이면 입력 업체 순서를 유지해 같은 1순위를 결정한다', () => {
+  const f = start(); checks(f, true); d(f, 'ADVANCE_MONTH');
+  const suppliers = f.state.getSuppliers().filter((supplier) => supplier.id !== 'S2').map((supplier) => ({
+    ...supplier, price: 100, quality: 5, deliveryDays: 42,
+    specs: ['standardSize', 'antiSlip'], capacity: { mattress: 20, bedding: 20 }
+  }));
+  f.state.setSuppliers(suppliers);
+  const result = f.compareSuppliers();
+  assert.equal(result.rows[0].score, result.rows[1].score);
+  assert.equal(result.winnerId, suppliers[0].id);
+  assert.equal(f.compareSuppliers().winnerId, suppliers[0].id);
+});
+
+test('F-08 예산 부족 계약은 거부 이벤트만 내고 예산·계약·단계를 유지한다', () => {
+  const f = start(); checks(f, true); d(f, 'ADVANCE_MONTH');
+  const saved = f.state.toJSON(); saved.gameState.budget = 0;
+  assert.equal(f.state.load(saved).ok, true);
+  const events = [];
+  f.state.on(TYCOON.core.RESULT_EVENTS.CONTRACT_REJECTED, (payload) => events.push(payload));
+  const result = f.procurement.createContract('S1');
+  assert.equal(result.reason, 'INSUFFICIENT_BUDGET');
+  assert.deepEqual(events, [{ supplierId: 'S1', reason: 'INSUFFICIENT_BUDGET' }]);
+  assert.equal(f.state.getBudget(), 0);
+  assert.equal(f.state.getContract(), null);
+  assert.equal(f.state.getProjectStatus(), 'REVIEWING');
+});
+
+test('F-08 부적격·2순위 계약 거부 시 예산과 상태를 보존한다', () => {
+  const f = start(); checks(f, true); d(f, 'ADVANCE_MONTH');
+  const before = f.state.getBudget();
+  assert.equal(f.procurement.createContract('S2').reason, 'NOT_ELIGIBLE');
+  assert.equal(f.procurement.createContract('S3').reason, 'NOT_ELIGIBLE');
+  assert.equal(f.state.getBudget(), before);
+  assert.equal(f.state.getContract(), null);
+  assert.equal(f.state.getProjectStatus(), 'REVIEWING');
+});
+
 test('확인 전에는 월 진행 불가, 사건 중에는 다음 단계로 못 감', () => {
   const f = start();
   assert.equal(d(f, 'ADVANCE_MONTH').ok, false);
