@@ -100,6 +100,46 @@ test('힌트 끄기: 바로 확정', () => {
   assert.deepEqual(d(f, 'CONFIRM_QUANTITIES').events, ['QUANTITIES_CONFIRMED']);
 });
 
+test('F-05 시작 재고와 점검 여부별 부족 수량이 일관되고 확정값이 계약에 전달된다', () => {
+  const f = start();
+  assert.deepEqual(TYCOON.data.INVENTORY, {
+    mattress: { count: 8, wet: 2 }, bedding: { count: 12, wet: 0 }
+  });
+  assert.deepEqual(f.procurement.knownShortage(), { mattress: 12, bedding: 8 });
+  assert.deepEqual(f.procurement.trueShortage(), { mattress: 14, bedding: 8 });
+
+  d(f, 'CHECK_RESIDENTS'); d(f, 'CHECK_USER_SPEC'); d(f, 'CHECK_INVENTORY_COUNT');
+  assert.deepEqual(d(f, 'CHECK_MATTRESS_CONDITION').events, ['MATTRESS_CONDITION_CHECKED']);
+  assert.deepEqual(f.procurement.knownShortage(), { mattress: 14, bedding: 8 });
+  assert.deepEqual(f.procurement.knownShortage(), f.procurement.knownShortage());
+  assert.deepEqual(d(f, 'CONFIRM_QUANTITIES').events, ['QUANTITIES_CONFIRMED']);
+  assert.deepEqual(f.view().project.quantities, { mattress: 14, bedding: 8 });
+
+  assert.ok(d(f, 'ADVANCE_MONTH').ok);
+  assert.equal(f.compareSuppliers().rows.find((row) => row.id === 'S1').price, 182);
+  assert.ok(d(f, 'SIGN_CONTRACT').ok);
+  assert.deepEqual(Object.fromEntries(f.state.getContract().items.map((item) => [item.itemId, item.quantity])), {
+    mattress: 14, bedding: 8
+  });
+});
+
+test('F-05 잘못 확정한 수량도 다음 단계 진행을 막지 않고 힌트는 한 번만 표시된다', () => {
+  const f = start();
+  d(f, 'CHECK_RESIDENTS'); d(f, 'CHECK_USER_SPEC'); d(f, 'CHECK_INVENTORY_COUNT');
+  assert.deepEqual(d(f, 'CONFIRM_QUANTITIES').events, ['HINT_WET']);
+  assert.equal(f.view().project.quantities, null);
+  assert.deepEqual(d(f, 'CONFIRM_QUANTITIES').events, ['QUANTITIES_CONFIRMED']);
+  assert.deepEqual(f.view().project.quantities, { mattress: 12, bedding: 8 });
+  assert.equal(d(f, 'CONFIRM_QUANTITIES').ok, false);
+
+  assert.ok(d(f, 'ADVANCE_MONTH').ok);
+  assert.equal(f.compareSuppliers().rows.find((row) => row.id === 'S1').price, 164);
+  assert.ok(d(f, 'SIGN_CONTRACT').ok);
+  assert.deepEqual(Object.fromEntries(f.state.getContract().items.map((item) => [item.itemId, item.quantity])), {
+    mattress: 12, bedding: 8
+  });
+});
+
 test('사업 단계가 기능정의서 순서대로 지나간다', () => {
   const f = start();
   const seen = [];
