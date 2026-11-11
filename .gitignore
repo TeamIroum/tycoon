@@ -1,0 +1,9 @@
+# Submission ZIP
+AI게임_실행파일_*.zip
+
+# Test screenshots
+tests/browser/play-qa-shots/
+
+# Temporary files
+*.tmp
+*.log

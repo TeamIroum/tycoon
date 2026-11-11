@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>조달청 타이쿤</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #0f1628; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #game canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<!--
+  게임 본체. GitHub Pages가 이 파일을 연다. 개발 중에는 더블클릭으로 실행한다(서버·설치·빌드 없음).
+  스크립트는 위에서부터 순서대로 실행된다. 먼저 쓰이는 파일이 위에 있어야 한다.
+  새 파일은 해당 구역 끝에 한 줄 추가한다. 이 목록은 팀원 1이 관리한다.
+-->
+<script src="lib/phaser-3.80.1.min.js"></script>
+
+<!-- 설정 (팀원 1) -->
+<script src="src/config/gameConfig.js"></script>
+<script src="src/config/balance.js"></script>
+<script src="src/config/assets.js"></script>
+
+<!-- 공통 기반 (팀원 1) -->
+<script src="src/core/EventBus.js"></script>
+<script src="src/core/events.js"></script>
+<script src="src/core/results.js"></script>
+<script src="src/core/schema.js"></script>
+<script src="src/core/GameState.js"></script>
+<script src="src/core/sceneUtils.js"></script>
+
+<!-- 데이터 -->
+<script src="src/data/projects.js"></script>      <!-- 팀원 2 -->
+<script src="src/data/suppliers.js"></script>     <!-- 팀원 2 -->
+<script src="src/data/facilities.js"></script>    <!-- 팀원 3 -->
+<script src="src/data/dialogs.js"></script>       <!-- 팀원 4 -->
+
+<!-- 시스템 -->
+<script src="src/systems/ProcurementSystem.js"></script>  <!-- 팀원 2 -->
+<script src="src/systems/ProgressSystem.js"></script>     <!-- 팀원 3 -->
+<script src="src/systems/DeliverySystem.js"></script>     <!-- 팀원 3 -->
+<script src="src/systems/EvaluationSystem.js"></script>   <!-- 팀원 3 -->
+<script src="src/systems/FacilitySystem.js"></script>     <!-- 팀원 3 -->
+<script src="src/systems/RecruitSystem.js"></script>      <!-- 팀원 3 -->
+<script src="src/systems/TutorialFlow.js"></script>       <!-- 팀원 1 -->
+<script src="src/core/BrowserSave.js"></script>           <!-- 팀원 1 -->
+
+<!-- UI -->
+<script src="src/ui/widgets.js"></script>         <!-- 팀원 4 -->
+<script src="src/ui/viewData.js"></script>        <!-- 팀원 4 -->
+<script src="src/ui/MascotDialog.js"></script>    <!-- 팀원 4 -->
+<script src="src/ui/art.js"></script>             <!-- 팀원 3 (관청 그림은 팀원 4와 공유) -->
+
+<!-- 화면 -->
+<script src="src/scenes/BootScene.js"></script>     <!-- 팀원 1 -->
+<script src="src/scenes/PreloadScene.js"></script>  <!-- 팀원 1 -->
+<script src="src/scenes/TitleScene.js"></script>    <!-- 팀원 1 -->
+<script src="src/scenes/OfficeScene.js"></script>   <!-- 팀원 4 -->
+<script src="src/scenes/VillageScene.js"></script>  <!-- 팀원 3 -->
+<script src="src/scenes/HallScene.js"></script>     <!-- 팀원 3 -->
+<script src="src/scenes/UIScene.js"></script>       <!-- 팀원 4 -->
+<script src="src/scenes/EndingScene.js"></script>   <!-- 팀원 4 -->
+
+<!-- 진입점: 항상 마지막 -->
+<script src="src/main.js"></script>
+</body>
+</html>
