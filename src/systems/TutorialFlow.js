@@ -11,7 +11,7 @@
   'use strict';
   const TYCOON = (globalThis.TYCOON = globalThis.TYCOON || {});
   const SYSTEMS = (TYCOON.systems = TYCOON.systems || {});
-  const { GameState, REASON, DATE_PHASE } = TYCOON.core;
+  const { GameState, REASON, FLOW_REASON, DATE_PHASE } = TYCOON.core;
   const { INITIAL_STATE, BALANCE } = TYCOON.config;
 
   const REASON_TEXT = {
@@ -65,12 +65,15 @@
 
     #emit(events) { for (const fn of this.listeners.slice()) fn(this.view(), events); }
 
-    /** 화면에서 오는 명령. 실패하면 상태를 바꾸지 않고 이유를 돌려준다. */
+    /**
+     * 화면에서 오는 명령. 실패하면 상태를 바꾸지 않고 이유를 돌려준다.
+     * 실패: { ok: false, error: 안내 문구, reason: REASON.* 또는 FLOW_REASON.*, code?: 'ROLLBACK_FAILED' }
+     */
     dispatch(type, payload = {}) {
-      if (this.fatal) return { ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED' };
-      if (this.busy) return { ok: false, error: '이전 명령을 처리하는 중입니다' };
+      if (this.fatal) return { ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED', reason: FLOW_REASON.ROLLBACK_FAILED };
+      if (this.busy) return { ok: false, error: '이전 명령을 처리하는 중입니다', reason: FLOW_REASON.COMMAND_BUSY };
       const handler = this.#handlers[type];
-      if (!handler) return { ok: false, error: '알 수 없는 명령: ' + type };
+      if (!handler) return { ok: false, error: '알 수 없는 명령: ' + type, reason: FLOW_REASON.UNKNOWN_COMMAND };
       const snapshot = this.state.toJSON();
       const metaSnapshot = structuredClone(this.meta);
       this.busy = true;
@@ -85,7 +88,8 @@
           this.meta = metaSnapshot;
           this.state.finishTransaction(false);
           this.busy = false;
-          return { ok: false, error: (result && result.message) || (originalError ? originalError.message : REASON_TEXT[result && result.reason] || (result && result.reason) || '명령 실패') };
+          const reason = originalError ? FLOW_REASON.COMMAND_FAILED : (result && result.reason) || FLOW_REASON.COMMAND_FAILED;
+          return { ok: false, error: (result && result.message) || (originalError ? originalError.message : REASON_TEXT[result && result.reason] || (result && result.reason) || '명령 실패'), reason };
         } catch (recoveryError) {
           this.state.finishTransaction(true);
           this.fatal = { originalError: String(originalFailure && (originalFailure.stack || originalFailure.message || originalFailure.reason || originalFailure)), recoveryError: String(recoveryError && (recoveryError.stack || recoveryError.message || recoveryError)) };
@@ -93,7 +97,7 @@
           console.error('TutorialFlow rollback failed:', recoveryError);
           this.busy = false;
           this.#emit([]);
-          return { ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED' };
+          return { ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED', reason: FLOW_REASON.ROLLBACK_FAILED };
         }
       }
       this.state.finishTransaction(true);

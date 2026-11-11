@@ -31,6 +31,8 @@
 - Scene/UI에서 규칙을 중복 구현하거나 GameState setter/System을 직접 호출하지 않는다.
 - 기존 코드의 IIFE, 이름 공간, 스크립트 로딩 순서를 유지한다.
 - System 결과는 기존 결과 형식 `{ ok: true, ... }` 또는 `{ ok: false, reason: '...' }`을 따른다.
+- 화면이 받는 `dispatch()` 결과는 성공 `{ ok: true, events }`, 실패 `{ ok: false, error, reason, code? }`다. `reason`은 `REASON` 또는 `FLOW_REASON` 값이고, `error`는 `TutorialFlow`가 정한 기본 안내 문구다. UI는 실패 종류를 `reason`으로 구분하며 `error` 문자열을 비교하지 않는다. `code: 'ROLLBACK_FAILED'`는 기존 호환을 위해 유지한다.
+- 실패한 명령의 상태·결과 이벤트는 롤백과 함께 버리고 외부로 전달하지 않는다. 롤백 뒤 실패 이벤트를 따로 발생시키지 않으며, 실패 정보는 `dispatch()` 반환값으로만 전달한다.
 - 명령 실패와 롤백은 상태 및 meta를 명령 직전 snapshot으로 복원한다. 명령 직전이 `INSPECTING`이면 정상 롤백 뒤에도 그 상태가 유지된다.
 - 복원 자체가 실패한 경우에만 `ROLLBACK_FAILED` fatal 상태로 전환한다. fatal 중 명령은 차단하며 새 게임에서 fatal을 초기화한다.
 

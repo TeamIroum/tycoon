@@ -4,3 +4,4 @@ import './schema.test.mjs';
 import './tools.test.mjs';
 import './flow.test.mjs';
 import './autosave.test.mjs';
+import './contract.test.mjs';

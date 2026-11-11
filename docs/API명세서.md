@@ -39,7 +39,7 @@ create() {
 - `getGameState(scene)`: 현재 Scene에서 공통 GameState를 가져온다(`game.registry`의 `GAME_STATE_KEY`).
 - `listenTo(scene, event, callback)`: 이벤트를 구독한다. Scene 종료(`shutdown`) 시 구독이 자동 해제된다.
 - `goTo(scene, sceneKey)`: 화면을 전환한다.
-- 실패한 명령 중 발생한 이벤트는 전달되지 않는다(2장 "상태 변경 이벤트" 참고). 실패 안내는 `dispatch()` 반환값의 `error`로 처리한다.
+- 실패한 명령 중 발생한 이벤트는 전달되지 않는다(2장 "상태 변경 이벤트" 참고). 실패 안내는 `dispatch()` 반환값의 `reason`·`error`로 처리한다(6-3).
 
 ### 화면과 상태 연결
 
@@ -320,7 +320,18 @@ return fail(REASON.NOT_ELIGIBLE, { specs });
 | `INVALID_STATE` | 현재 단계에서 수행할 수 없는 작업 |
 | `INSPECTION_FAILED` | 정식 검사 실패. `TutorialFlow`의 `CONFIRM_INSPECTION`만 사용한다(System은 `NOT_ELIGIBLE`을 반환하고 `TutorialFlow`가 이 값으로 바꾼다) |
 
-`REASON`은 System 결과와 `TutorialFlow` 내부에서 사용한다. 현재 화면은 `reason`을 받지 않는다. `dispatch()`가 `TutorialFlow`의 `REASON_TEXT`로 바꾼 안내 문구를 `error` 문자열로 반환한다(6-3). 저장 결과의 reason(`EMPTY`, `CORRUPTED` 등)은 `REASON`과 별개다(2장).
+### `FLOW_REASON` 목록 (`dispatch()` 전용)
+
+System 밖에서 생기는 `dispatch()` 실패 이유다. `TYCOON.core.FLOW_REASON`에 정의하며 `REASON`·저장 reason과 이름이 겹치지 않는다.
+
+| FLOW_REASON | 의미 |
+|---|---|
+| `ROLLBACK_FAILED` | 롤백 실패 또는 fatal 상태 중 명령. `code`와 같은 값 |
+| `COMMAND_BUSY` | 이전 명령을 처리하는 중에 다시 호출됨 |
+| `UNKNOWN_COMMAND` | 등록되지 않은 명령 |
+| `COMMAND_FAILED` | 처리 중 예외(코드 오류) 또는 `reason` 없이 실패한 결과 |
+
+`dispatch()` 실패 반환의 `reason`은 System 결과의 `REASON` 값을 그대로 쓰거나(`INSPECTION_FAILED`는 `TutorialFlow`가 지정) 위 `FLOW_REASON` 값을 쓴다. `error`에는 `TutorialFlow`의 `REASON_TEXT` 등으로 만든 기본 안내 문구가 함께 들어간다(6-3). 저장 결과의 reason(`EMPTY`, `CORRUPTED` 등)은 `REASON`과 별개다(2장).
 
 ---
 
@@ -361,7 +372,7 @@ System에서 `gameState.notify()`를 호출하여 발생시킨다.
 | 이벤트 | 발생 주체 | payload | 실제 전달 |
 |---|---|---|---|
 | `CONTRACT_CREATED` | 팀원 1 | `{ contractId, supplierId, amount }` | `SIGN_CONTRACT` 성공 |
-| `CONTRACT_REJECTED` | 팀원 1 | `{ supplierId, reason }` | **현재 전달되지 않음.** 발생 직후 계약 명령이 실패해 롤백과 함께 버려진다 |
+| `CONTRACT_REJECTED` | 팀원 1 | `{ supplierId, reason }` | **`dispatch()` 경로에서는 발생하지 않음.** `ProcurementSystem.createContract()`를 직접 호출해 예산 초과 업체를 지정할 때만 발생 |
 | `TIME_ADVANCED` | 팀원 1 | `{ date }` (`{ month, phase: 'RUN', pending }`) | `ADVANCE_MONTH` 성공 |
 | `DELIVERY_ARRIVED` | 팀원 1 | `{ contractId }` | 2월차 `ADVANCE_MONTH` |
 | `DELIVERY_ISSUE_FOUND` | 팀원 1 | `{ issue }` | 2월차 `ADVANCE_MONTH` |
@@ -374,6 +385,21 @@ System에서 `gameState.notify()`를 호출하여 발생시킨다.
 | `TUTORIAL_STEP` | 팀원 3 | `{ stepId }` | 이름만 정의. 현재 발생 위치 없음 |
 
 결과 이벤트는 GameState 이벤트(`gameState.on`/`listenTo`)이며 6-3의 화면 알림과 다르다. 현재 화면 코드는 결과 이벤트를 구독하지 않고 화면 알림만 사용한다.
+
+**실패 이벤트 정책: System 직접 호출과 `dispatch()` 경로의 차이**
+
+| 구분 | System 직접 호출 (테스트·내부) | `TutorialFlow.dispatch()` (화면) |
+|---|---|---|
+| 이벤트 발생 시점 | `notify()`·setter 호출 즉시 | 명령 성공 후 한꺼번에(커밋) |
+| 실패 시 상태 | System이 변경 전 검사로 상태를 바꾸지 않음. 검사 단계 등 부분 변경은 남을 수 있음 | 명령 직전 snapshot으로 전체 복원 |
+| 실패 시 결과 이벤트 | 발생함(`CONTRACT_REJECTED`, `INSPECTION_COMPLETED { passed: false }`) | 전달되지 않음(롤백과 함께 폐기) |
+| `CONTRACT_REJECTED` | 예산 초과 업체를 직접 지정하면 발생 | 1순위 업체만 계약하므로 발생 지점에 도달하지 않음 |
+| 미통과 `INSPECTION_COMPLETED` | 발생 | 폐기. 실패는 `reason: 'INSPECTION_FAILED'`로 반환 |
+| 실패 정보 전달 | 반환값 `{ ok: false, reason, detail? }` | 반환값 `{ ok: false, error, reason }` |
+
+- 실패한 명령은 롤백되며 결과 이벤트를 외부로 전달하지 않는다. 롤백 이후에 실패 이벤트를 따로 발생시키지 않는다.
+- 화면은 실패를 결과 이벤트가 아니라 `dispatch()` 반환값으로 처리한다. 결과 이벤트는 성공한 명령에서만 받는다.
+- 이 정책은 `tests/contract.test.mjs`의 "정책:" 테스트가 검증한다. `tests/flow.test.mjs`의 `CONTRACT_REJECTED` 테스트는 System 직접 호출 경로를 검증한다.
 
 종합 평가는 S~D와 평가 이유 한 문장으로 표시한다. `passingGrades`는 S, A, B, C이며 D는 미통과다. D에서는 시설 개선과 동료 모집을 막는다. 상세 점수, 등급 경계와 D 도달 조건은 TEMP로 유지한다.
 
@@ -451,20 +477,24 @@ System 함수의 반환 형식은 역할에 따라 다르다.
 | 상황 | 반환값 | 상태·저장 |
 |---|---|---|
 | 성공 | `{ ok: true, events: string[] }` | 변경 확정, 구독자 호출, 자동 저장 |
-| 업무 실패(System 실패, 예외 포함) | `{ ok: false, error: string }` | 명령 직전 상태·meta로 복원, 이벤트 폐기, 구독자 호출 없음, 저장 없음 |
-| 롤백 실패 | `{ ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED' }` | fatal 상태 전환, 구독자에 `[]` 1회 전달, 저장 없음(`FATAL`) |
+| System 업무 실패 | `{ ok: false, error: string, reason: REASON.* }` | 명령 직전 상태·meta로 복원, 이벤트 폐기, 구독자 호출 없음, 저장 없음 |
+| 처리 중 예외, `reason` 없는 실패 | `{ ok: false, error: string, reason: 'COMMAND_FAILED' }` | 위와 같음 |
+| 롤백 실패 | `{ ok: false, error: '복구 불가능 오류: 새 게임을 시작해 주세요', code: 'ROLLBACK_FAILED', reason: 'ROLLBACK_FAILED' }` | fatal 상태 전환, 구독자에 `[]` 1회 전달, 저장 없음(`FATAL`) |
 | fatal 중 명령 | 위와 같은 `ROLLBACK_FAILED` 반환 | 처리하지 않음 |
-| 처리 중 재호출 | `{ ok: false, error: '이전 명령을 처리하는 중입니다' }` | 처리하지 않음 |
-| 알 수 없는 명령 | `{ ok: false, error: '알 수 없는 명령: <type>' }` | 처리하지 않음 |
+| 처리 중 재호출 | `{ ok: false, error: '이전 명령을 처리하는 중입니다', reason: 'COMMAND_BUSY' }` | 처리하지 않음 |
+| 알 수 없는 명령 | `{ ok: false, error: '알 수 없는 명령: <type>', reason: 'UNKNOWN_COMMAND' }` | 처리하지 않음 |
 
-- 실패 반환에는 `reason`이 없다. `error`는 다음 순서로 정한다: 하위 결과의 `message` → 예외 메시지 → `REASON_TEXT[reason]` → `reason` 문자열 → `'명령 실패'`.
+- 모든 실패 반환에 `ok`, `error`, `reason`이 있다. `reason`은 `REASON`(4장) 또는 `FLOW_REASON` 값 중 하나다. 화면은 실패 종류를 `reason`으로 구분하고, 문자열 `error`를 비교해 분기하지 않는다.
+- `error`는 기존과 같은 안내 문구이며 다음 순서로 정한다: 하위 결과의 `message` → 예외 메시지 → `REASON_TEXT[reason]` → `reason` 문자열 → `'명령 실패'`. 화면은 `error`를 그대로 표시하거나 `reason`에 따라 자체 문구로 바꿀 수 있다.
 - `REASON_TEXT` 문구: `INVALID_AMOUNT` '금액이 올바르지 않습니다', `INSUFFICIENT_BUDGET` '집행 가능액이 부족합니다', `NOT_FOUND` '대상을 찾을 수 없습니다', `NOT_ELIGIBLE` '계약할 수 없는 업체입니다', `ALREADY_DONE` '이미 처리했습니다', `INVALID_STATE` '지금 단계에서 할 수 없습니다', `INSPECTION_FAILED` '정식 검사 실패: 필수 수량 또는 규격을 충족하지 못했습니다'.
-- `code`는 `ROLLBACK_FAILED`일 때만 있다. 현재 `UIScene`은 실패 시 `error`를 토스트로 표시한다.
+- `code`는 `ROLLBACK_FAILED`일 때만 있으며 기존 호환을 위해 유지한다. 이때 `reason`도 같은 값이다. 현재 `UIScene`은 실패 시 `error`를 토스트로 표시한다.
+- 성공 반환은 `{ ok, events }`만 있고 `reason`이 없다.
+- 예산이 부족한 상태의 `SIGN_CONTRACT`는 `INSUFFICIENT_BUDGET`이 아니라 `NOT_FOUND`('대상을 찾을 수 없습니다')로 실패한다. 예산을 넘는 제안은 비교 단계에서 부적격('예산 초과')이 되어 1순위 업체(`winnerId`)가 없기 때문이다. 일반 플레이에서는 발생하지 않는다.
 
 **`CONFIRM_INSPECTION` 실패 처리 (`INSPECTION_FAILED`)**
 
 - 사전 조건: `pending`이 `INSPECTION`이 아니면 `INVALID_STATE`.
-- `DeliverySystem.inspect()`가 `NOT_ELIGIBLE`을 반환하면 `TutorialFlow`가 `reason`을 `INSPECTION_FAILED`로 바꾸고 `message`를 검사 소견(`detail.findings`)을 이어 붙인 문장으로 정한다. 소견이 없으면 `REASON_TEXT.INSPECTION_FAILED`를 사용한다. 화면은 이 문장을 `error`로 받는다.
+- `DeliverySystem.inspect()`가 `NOT_ELIGIBLE`을 반환하면 `TutorialFlow`가 `reason`을 `INSPECTION_FAILED`로 바꾸고 `message`를 검사 소견(`detail.findings`)을 이어 붙인 문장으로 정한다. 소견이 없으면 `REASON_TEXT.INSPECTION_FAILED`를 사용한다. 화면은 이 문장을 `error`로, `'INSPECTION_FAILED'`를 `reason`으로 받는다.
 - 보완 납품 비용을 집행할 수 없으면 `INSUFFICIENT_BUDGET`('집행 가능액이 부족합니다')로 실패한다.
 - 실패하면 보완 비용 차감·납품 기록·`INSPECTION_COMPLETED`를 포함한 모든 변경이 취소되고 사업 `INSPECTING`, `pending: 'INSPECTION'` 상태가 유지된다. 평가·시설 개선·월 마감은 실행되지 않는다.
 
@@ -547,8 +577,8 @@ TYCOON.app.store.dispatch('명령', payload);
 | 능력치 수치 범위 | 실제 검증 범위 확인 및 기획 확정 필요 | 기획 |
 | 매트 사용 불가 수량 | 전체 재고 8개. 젖은 매트 수량 및 최종 부족 수량 미확정 | 기획·팀원 1 |
 | 재고 데이터 구조 | 전체·사용 불가·사용 가능 수량의 계산 기준 확정. 실제 필드명은 코드 확인 필요 | 팀원 1 |
-| 결과 이벤트 목록 및 payload | 현재 목록은 구현 기준 초안. 실패 시 결과 이벤트(`CONTRACT_REJECTED`, 미통과 `INSPECTION_COMPLETED`)가 전달되지 않는 문제와 `TUTORIAL_STEP` 사용 여부 미정 | 팀원 1(규칙 발생), 팀원 3(UI 소비) |
-| 화면 계약 | `dispatch()` 실패에 `reason`이 없고 안내 문구를 `TutorialFlow`가 정함. `newGame()`·조회 함수는 `store`가 아닌 `flow`로 직접 호출. 변경 여부는 협의 대상 | 팀원 1, 팀원 3 |
+| 결과 이벤트 목록 및 payload | 현재 목록은 구현 기준 초안. 실패한 명령의 결과 이벤트는 전달하지 않는 정책(5-2) 확정. `CONTRACT_REJECTED`·`TUTORIAL_STEP` 유지 여부 미정 | 팀원 1(규칙 발생), 팀원 3(UI 소비) |
+| 화면 계약 | `dispatch()` 실패에 `reason` 추가(기존 `error`·`code` 유지). 기본 안내 문구 소유(TutorialFlow 또는 UI), `newGame()`·조회 함수의 `store` 노출 여부는 협의 대상 | 팀원 1, 팀원 3 |
 | 업체 비교 가중치 | 미확정 | 기획 |
 | 평가 등급 공식 및 경계 | 첫 버전은 S~D와 이유 한 문장. 상세 점수 및 공식은 후속 개발 | 기획 |
 | 브라우저 자동 저장 | GameState 직렬화·복원과 localStorage 자동 저장·새로고침 복원 구현. 저장 실패 시 게임은 계속되며 상태는 `TYCOON.app.saveStatus`로 노출 | 팀원 1 |
