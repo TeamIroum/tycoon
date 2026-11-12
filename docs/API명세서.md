@@ -401,7 +401,7 @@ System에서 `gameState.notify()`를 호출하여 발생시킨다.
 - 화면은 실패를 결과 이벤트가 아니라 `dispatch()` 반환값으로 처리한다. 결과 이벤트는 성공한 명령에서만 받는다.
 - 이 정책은 `tests/contract.test.mjs`의 "정책:" 테스트가 검증한다. `tests/flow.test.mjs`의 `CONTRACT_REJECTED` 테스트는 System 직접 호출 경로를 검증한다.
 
-종합 평가는 S~D와 평가 이유 한 문장으로 표시한다. `passingGrades`는 S, A, B, C이며 D는 미통과다. D에서는 시설 개선과 동료 모집을 막는다. 상세 점수, 등급 경계와 D 도달 조건은 TEMP로 유지한다.
+종합 평가는 S~D와 평가 이유 한 문장으로 표시한다. `passingGrades`는 S, A, B, C이며 D는 미통과다. D에서는 시설 개선과 동료 모집을 막는다. 상세 점수, 등급 경계와 D 도달 조건은 TEMP로 유지한다. 첫 튜토리얼의 정상 플레이에서 `GRADE_CALCULATED`의 `grade`는 S(매트 점검) 또는 C(점검 생략 후 보완)만 나온다. 화면은 A·B·D도 처리할 수 있어야 하며, D 경로는 상태 주입 테스트로 검증한다(기능정의서 F-12).
 
 결과 이벤트는 `RESULT_EVENTS`에 등록된 이름만 `notify()`로 전달할 수 있다.
 
