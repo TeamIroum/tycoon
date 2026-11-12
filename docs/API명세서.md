@@ -161,9 +161,13 @@ GameState의 저장 관련 메서드는 데이터 직렬화와 복원을 담당�
 
 - `attach(flow, onStatus)`는 `TutorialFlow.subscribe()`로 등록된다. `TutorialFlow`는 성공한 명령과 `newGame()` 뒤에만 구독자를 호출하므로, 실패·롤백된 명령은 저장되지 않는다.
 - `GAME_STARTED`(새 게임)이면 `reset()`으로 기존 슬롯을 지우고 새 게임 상태를 기록한다. 그 밖의 성공 명령(`SET_HINTS`, `MARK_DIALOG_SEEN` 포함)은 `save()`로 현재 상태를 덮어쓴다.
+- 저장은 성공한 공개 명령 하나당 1회다. `CONFIRM_INSPECTION`처럼 한 명령 안에서 검사·평가·시설 개선이 함께 실행되어도 명령이 끝난 뒤 1회만 저장하며 중간 상태는 기록하지 않는다. 실패한 명령은 저장하지 않는다(0회).
+- 복원 검증은 `seenDialogs`에 문자열이 아닌 값이 있으면 기록 전체를 손상으로 폐기한다. 이를 막기 위해 `MARK_DIALOG_SEEN`은 비어 있지 않은 문자열 `id`만 받는다(6-3 명령 표).
 - `flow.fatal`이 있으면 기록하지 않고 상태를 `FATAL`로 둔다.
 - 시작 시 `restore(flow)`는 저장된 상태를 `GameState.load()`로 불러오고 meta를 교체할 뿐 명령을 다시 실행하지 않는다. 따라서 마지막 성공 명령 이후의 상태(월중 포함)로 복원되며, 계약 예산·평가·채용 결과가 중복 적용되지 않는다. 같은 기록을 여러 번 복원해도 결과가 같다.
-- 손상(`CORRUPTED`)·버전 불일치(`VERSION_MISMATCH`) 기록은 폐기하고 초기 상태로 시작한다.
+- 손상(`CORRUPTED`)·버전 불일치(`VERSION_MISMATCH`) 기록은 폐기하고 초기 상태로 시작한다. 바깥 기록의 `version`이 1이 아니거나 없을 때, 안쪽 GameState의 `version`이 맞지 않을 때 모두 `VERSION_MISMATCH`이며 마이그레이션은 없다.
+- 빈 문자열 기록은 저장 없음과 같이 `EMPTY`로 처리하고 즉시 삭제하지 않는다. 다음 새 게임 저장이 덮어쓴다.
+- 제한: 복원 검증은 필드별 형식만 확인한다. 형식은 유효하지만 단계 간 정합성이 맞지 않는 기록(예: 진행 단계와 사업 상태 불일치, 계약이 있는데 예산이 차감 전 값)은 걸러지지 않고 그대로 복원된다. 정상 플레이로는 만들어지지 않고 저장 데이터를 직접 고친 경우에만 생긴다.
 
 **저장 상태 (`TYCOON.app.saveStatus`)**
 
@@ -401,7 +405,7 @@ System에서 `gameState.notify()`를 호출하여 발생시킨다.
 - 화면은 실패를 결과 이벤트가 아니라 `dispatch()` 반환값으로 처리한다. 결과 이벤트는 성공한 명령에서만 받는다.
 - 이 정책은 `tests/contract.test.mjs`의 "정책:" 테스트가 검증한다. `tests/flow.test.mjs`의 `CONTRACT_REJECTED` 테스트는 System 직접 호출 경로를 검증한다.
 
-종합 평가는 S~D와 평가 이유 한 문장으로 표시한다. `passingGrades`는 S, A, B, C이며 D는 미통과다. D에서는 시설 개선과 동료 모집을 막는다. 상세 점수, 등급 경계와 D 도달 조건은 TEMP로 유지한다.
+종합 평가는 S~D와 평가 이유 한 문장으로 표시한다. `passingGrades`는 S, A, B, C이며 D는 미통과다. D에서는 시설 개선과 동료 모집을 막는다. 상세 점수, 등급 경계와 D 도달 조건은 TEMP로 유지한다. 첫 튜토리얼의 정상 플레이에서 `GRADE_CALCULATED`의 `grade`는 S(매트 점검) 또는 C(점검 생략 후 보완)만 나온다. 화면은 A·B·D도 처리할 수 있어야 하며, D 경로는 상태 주입 테스트로 검증한다(기능정의서 F-12).
 
 결과 이벤트는 `RESULT_EVENTS`에 등록된 이름만 `notify()`로 전달할 수 있다.
 
@@ -517,7 +521,7 @@ System 함수의 반환 형식은 역할에 따라 다르다.
 | `CLOSE_REPORT` | `phase: 'REPORT'`. 2월차는 `pending` 없음 | 1월차: 2월차 월초로 / 2월차 통과: 정원 승인·후보 공개 / 2월차 D: 튜토리얼 종료 | `MONTH_PLAN` / `HEADCOUNT_APPROVED`, `RECRUIT_OPENED` / `TUTORIAL_ENDED` |
 | `HIRE { candidateId }` | 모집 단계(`phase: 'RECRUIT'`) | 동료 선발 | `HIRED` |
 | `SET_HINTS { on }` | 없음 | 안내 표시 설정(meta) | `META_CHANGED` |
-| `MARK_DIALOG_SEEN { id }` | 없음 | 대사 확인 기록(meta). 이미 있으면 변경 없음 | `META_CHANGED` |
+| `MARK_DIALOG_SEEN { id }` | `id`는 비어 있지 않은 문자열. 아니면(누락·`null`·숫자·객체·배열·빈 문자열) `NOT_FOUND`로 실패하고 meta·저장 기록을 바꾸지 않음 | 대사 확인 기록(meta). 이미 있으면 변경 없음 | `META_CHANGED` |
 
 `flow.newGame()`은 명령이 아니지만 구독자에 `['GAME_STARTED']`를 전달한다(1장).
 
