@@ -265,6 +265,49 @@ test('계약: 예산 부족 — 계약은 1순위 업체가 없어 NOT_FOUND, �
   assert.equal(inspection.view().pending, 'INSPECTION');
 });
 
+test('계약: 예산 부족으로 실패한 계약은 저장되지 않고, 예산 복구 후 재시도하면 한 번만 계약·차감', () => {
+  const f = start(); checks(f, true); assert.ok(f.dispatch('ADVANCE_MONTH').ok);
+  const { rows, winnerId } = f.compareSuppliers();
+  const price = rows.find((r) => r.id === winnerId).price;
+  // 자동 저장 연결: 실패한 명령은 기록을 바꾸지 않아야 한다.
+  const data = new Map();
+  const storage = { getItem: (k) => (data.has(k) ? data.get(k) : null), setItem: (k, v) => { data.set(k, String(v)); }, removeItem: (k) => { data.delete(k); } };
+  new TYCOON.core.BrowserSave({ storage }).attach(f);
+
+  patchState(f, (g) => { g.budget = 0; });
+  assert.ok(f.dispatch('SET_HINTS', { on: true }).ok, '주입 상태를 저장 기록에 반영');
+  const saved = data.get(TYCOON.core.AUTOSAVE_KEY);
+  const events = recordStateEvents(f);
+  expectFailure(f, 'SIGN_CONTRACT', undefined, { reason: REASON.NOT_FOUND, error: '대상을 찾을 수 없습니다' });
+  assert.deepEqual(events, [], '실패한 계약은 상태·결과 이벤트를 전달하지 않음');
+  assert.equal(data.get(TYCOON.core.AUTOSAVE_KEY), saved, '실패한 계약은 자동 저장하지 않음');
+
+  patchState(f, (g) => { g.budget = 300; });
+  const calls = []; f.subscribe((_, e) => calls.push(e));
+  const r = f.dispatch('SIGN_CONTRACT');
+  assert.deepEqual(r, { ok: true, events: ['CONTRACT_SIGNED', 'MONTH_ENDED'] });
+  assert.deepEqual(calls, [['CONTRACT_SIGNED', 'MONTH_ENDED']]);
+  const contract = f.state.getContract();
+  assert.equal(contract.supplierId, winnerId);
+  assert.equal(contract.amount, price);
+  assert.equal(f.state.getBudget(), 300 - price, '계약금은 한 번만 차감');
+  assert.equal(f.state.getProjectStatus(), 'CONTRACTED');
+  const v = f.view();
+  assert.equal(v.month, 1); assert.equal(v.phase, 'REPORT'); assert.equal(v.pending, null, '계약 후 1월차 월말 보고로 진행');
+  assert.equal(v.budget.spent, price);
+  assert.equal(events.filter(([name]) => name === RESULT_EVENTS.CONTRACT_CREATED).length, 1);
+  assert.equal(events.some(([name]) => name === RESULT_EVENTS.CONTRACT_REJECTED), false);
+  assert.deepEqual(JSON.parse(data.get(TYCOON.core.AUTOSAVE_KEY)).gameState, f.state.toJSON(), '성공한 재시도는 저장됨');
+});
+
+test('계약: 화면 명령 SIGN_CONTRACT는 업체 ID를 받지 않고 항상 비교 1순위와 계약', () => {
+  // 공개 화면 API로는 업체 ID를 전달할 수 없으므로 '존재하지 않는 업체 ID' 실패는 dispatch 경로에서 만들 수 없다.
+  const f = start(); checks(f, true); assert.ok(f.dispatch('ADVANCE_MONTH').ok);
+  const { winnerId } = f.compareSuppliers();
+  assert.ok(f.dispatch('SIGN_CONTRACT', { supplierId: 'NO_SUCH_SUPPLIER' }).ok);
+  assert.equal(f.state.getContract().supplierId, winnerId);
+});
+
 test('계약: 정식 검사 미통과는 INSPECTION_FAILED와 검사 소견 문구', () => {
   const f = start(); toInspection(f, true);
   patchState(f, (g) => { g.contract.specs = []; });
