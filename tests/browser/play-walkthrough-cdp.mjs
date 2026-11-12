@@ -561,6 +561,18 @@ async function withBrowser(scenario) {
       await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.closeReport','evaluation report button');
       await click('closeReport');await closeDialogs(['recruit']);
       await waitFor("TYCOON.app.flow.view().phase==='RECRUIT'",'recruit selection');
+      // F-14/F-18: 후보 공개 직후 새로고침해도 같은 후보·정원·진행 단계로 복원되고, 채용은 일어나지 않는다.
+      const recruit=await savedNow('recruit opened');
+      assert.equal(recruit.view.phase,'RECRUIT');assert.equal(recruit.gameState.gameState.currentDate.pending,'RECRUIT');
+      assert.equal(recruit.gameState.gameState.candidates.length,3);assert.deepEqual(recruit.gameState.gameState.staff.hired,[]);
+      await capture('recruit-before-reload');
+      await reloadResume('recruit opened',recruit);
+      await waitFor("['cand0','cand1','cand2'].every(k=>!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets[k])",'candidate cards after reload',10000);
+      const recruitUi=await uiSnapshot();
+      assert.equal(recruitUi.dialogOpen,false,'recruit dialog reopened after reload');
+      assert.equal(recruitUi.targets.includes('ending'),false,'END panel shown before hire');
+      await assertNoWritesSinceReload('recruit opened');
+      await capture('recruit-resumed');
       await click('cand1');
       await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).selected!==null",'candidate selection');
       const chosen=await evaluate("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).selected");
@@ -617,7 +629,7 @@ async function withBrowser(scenario) {
       assert.ok(freshUi.texts.includes('1월차 월초 계획'),'new game phase label after reload');
       assert.equal(freshUi.targets.includes('ending'),false,'END panel shown after new game reload');
       await capture('new-game-resumed');
-      return {reloads:['tutorial END','during ending scene (colleague panel)','new game after END'],
+      return {reloads:['recruit opened (candidates revealed, no hire)','tutorial END','during ending scene (colleague panel)','new game after END'],
         restored:{phase:end.view.phase,grade:end.view.evaluation.grade,headcount:g.staff.headcount,hired:end.view.staff.hired.id,candidates:g.candidates.length,hall:g.facilities.hall.stage,budgetSpent:end.view.budget.spent},
         ui:endUi,colleagueArrivalReplayedAfterReload:replayedArrival,saveWritesDuringReload:0,
         newGame:{replacedSave:true,month:fresh.view.month,phase:fresh.view.phase,headcount:f.staff.headcount,restoredAsNewGame:true}};

@@ -183,6 +183,8 @@
         return { ok: true, events: ['HIRED'] };
       },
       MARK_DIALOG_SEEN({ id }) {
+        // 저장 복원 검증(F-18)은 seenDialogs에 문자열이 아닌 값이 있으면 기록 전체를 폐기한다. 비어 있지 않은 문자열 ID만 기록한다.
+        if (typeof id !== 'string' || id === '') return { ok: false, reason: REASON.NOT_FOUND };
         if (!this.meta.seenDialogs.includes(id)) this.meta.seenDialogs.push(id);
         return { ok: true, events: ['META_CHANGED'] };
       },
