@@ -72,7 +72,7 @@
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/play-walkthrough-cdp.mjs
 ```
 
-F-19 제출 도구·실행 파일을 바꿨다면 `tests/browser/submission-cdp.mjs`(압축 해제 후 실행 검증)도 실행한다. 테스트 개수는 완료 조건이 아니며 위 명령의 실제 출력을 기준으로 보고한다(참고 기록: 2026-11-12 기준 Node 100개, Chromium CDP 4개 경로, UI E2E 12개 시나리오, 제출 ZIP 검증 Chrome·Edge 통과). 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
+F-19 제출 도구·실행 파일을 바꿨다면 `tests/browser/submission-cdp.mjs`(압축 해제 후 실행 검증)도 실행한다. 에셋 목록, `art.js` 텍스처, Boot/Preload 순서, Phaser 버전을 바꿨다면 `tests/browser/texture-fallback-cdp.mjs`(실제 이미지 우선·임시 텍스처 폴백)도 실행한다. 테스트 개수는 완료 조건이 아니며 위 명령의 실제 출력을 기준으로 보고한다(참고 기록: 2026-11-12 기준 Node 100개, Chromium CDP 4개 경로, UI E2E 12개 시나리오, 제출 ZIP 검증 Chrome·Edge 통과). 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
 
 완료 보고에는 목적, 수정 파일별 변경, 실행 명령과 통과·실패·미실행 수, 브라우저 입력 방식, 미해결 위험을 적는다.
 
