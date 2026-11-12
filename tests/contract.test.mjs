@@ -319,6 +319,102 @@ test('계약: 정식 검사 미통과는 INSPECTION_FAILED와 검사 소견 문�
   assert.equal(v.evaluation, null);
 });
 
+// ---------- F-11 검사 실패 사유 분류·재시도·저장 복원 ----------
+// 규격 미충족(INSPECTION_FAILED)과 보완 비용 부족(INSUFFICIENT_BUDGET)의 사유 분류는 위 두 테스트가 검증한다.
+
+function memoryStorage() {
+  const data = new Map();
+  return { data, getItem: (k) => (data.has(k) ? data.get(k) : null), setItem: (k, v) => { data.set(k, String(v)); }, removeItem: (k) => { data.delete(k); } };
+}
+/** 검사 실패를 만드는 주입. withCondition은 매트 점검 여부(false면 보완 18만원 경로). */
+const INSPECTION_FAILURES = {
+  specs: { withCondition: true, inject: (g) => { g.contract.specs = []; }, reason: REASON.INSPECTION_FAILED, error: /필수 규격/, grade: 'S', supplement: 0 },
+  budget: { withCondition: false, inject: (g) => { g.budget = 17; }, reason: REASON.INSUFFICIENT_BUDGET, error: '집행 가능액이 부족합니다', grade: 'C', supplement: 18 }
+};
+
+test('F-11 검사 판정이 아닌 실패는 INSPECTION_FAILED가 아니라 원래 사유(INVALID_STATE)로 반환', () => {
+  // 사업 단계 불일치: 진행 대기는 검사지만 사업이 INSPECTING이 아님
+  const stage = start(); toInspection(stage, true);
+  patchState(stage, (g) => { g.currentProject.status = 'DELIVERING'; });
+  expectFailure(stage, 'CONFIRM_INSPECTION', undefined, { reason: REASON.INVALID_STATE, error: '지금 단계에서 할 수 없습니다' });
+  assert.equal(stage.view().pending, 'INSPECTION');
+
+  // 보완 단가 정보 없음: 점검 생략 경로라 보완이 필요하지만 업체 단가가 없음
+  const price = start(); toInspection(price, false);
+  patchState(price, (g) => { g.suppliers = g.suppliers.map((s) => ({ ...s, unitPrice: undefined })); });
+  expectFailure(price, 'CONFIRM_INSPECTION', undefined, { reason: REASON.INVALID_STATE, error: '지금 단계에서 할 수 없습니다' });
+  assert.equal(price.view().project.status, 'INSPECTING');
+  assert.equal(price.view().project.inspection, null);
+});
+
+for (const [kind, c] of Object.entries(INSPECTION_FAILURES)) {
+  test(`F-11 검사 실패(${kind}) 후 원인을 복구하면 같은 명령으로 재시도 성공, 차감·평가·시설 개선·저장은 한 번`, () => {
+    const f = start(); toInspection(f, c.withCondition);
+    const budget = f.state.getBudget(), contract = f.state.getContract();
+    const storage = memoryStorage();
+    new TYCOON.core.BrowserSave({ storage }).attach(f);
+    patchState(f, c.inject);
+    assert.ok(f.dispatch('SET_HINTS', { on: true }).ok, '주입 상태를 저장 기록에 반영');
+    const saved = storage.data.get(TYCOON.core.AUTOSAVE_KEY);
+    const events = recordStateEvents(f);
+
+    expectFailure(f, 'CONFIRM_INSPECTION', undefined, c); // GameState·meta 보존, 구독자 알림 없음
+    assert.deepEqual(events, [], '실패한 검사는 상태·결과 이벤트를 외부로 전달하지 않음');
+    assert.equal(storage.data.get(TYCOON.core.AUTOSAVE_KEY), saved, '실패한 검사는 자동 저장하지 않음');
+
+    patchState(f, (g) => { g.contract.specs = contract.specs; g.budget = budget; });
+    const calls = []; f.subscribe((_, e) => calls.push(e));
+    const r = f.dispatch('CONFIRM_INSPECTION');
+    assert.deepEqual(r, { ok: true, events: ['INSPECTION_DONE', 'USE_STARTED', 'MONTH_ENDED', 'EVALUATED'] });
+    assert.deepEqual(calls, [r.events]);
+    assert.equal(f.state.getBudget(), budget - c.supplement, '보완 비용은 한 번만 차감');
+    const d = f.state.getDelivery();
+    assert.equal(d.supplement ? d.supplement.amount : 0, c.supplement);
+    assert.equal(d.inspection.passed, true);
+    assert.equal(f.state.getEvaluation().grade, c.grade);
+    const count = (name) => events.filter(([n]) => n === name).length;
+    assert.equal(count(RESULT_EVENTS.INSPECTION_COMPLETED), 1);
+    assert.equal(events.find(([n]) => n === RESULT_EVENTS.INSPECTION_COMPLETED)[1].passed, true);
+    assert.equal(count(RESULT_EVENTS.GRADE_CALCULATED), 1);
+    assert.equal(count(RESULT_EVENTS.FACILITY_IMPROVED), 1);
+    const record = JSON.parse(storage.data.get(TYCOON.core.AUTOSAVE_KEY));
+    assert.deepEqual(record.gameState, f.state.toJSON(), '성공한 재시도는 저장됨');
+    assert.deepEqual(record.meta, f.meta);
+    expectFailure(f, 'CONFIRM_INSPECTION', undefined, { reason: REASON.INVALID_STATE, error: '지금 단계에서 할 수 없습니다' });
+  });
+
+  test(`F-11 검사 실패(${kind}) 후 새로고침하면 마지막 정상 저장(검사 대기)으로 복원되고 재시도 가능`, () => {
+    const f = start(); toInspection(f, c.withCondition);
+    const budget = f.state.getBudget();
+    const storage = memoryStorage();
+    new TYCOON.core.BrowserSave({ storage }).attach(f);
+    assert.ok(f.dispatch('SET_HINTS', { on: true }).ok, '검사 대기 상태를 정상 저장');
+    const saved = storage.data.get(TYCOON.core.AUTOSAVE_KEY);
+    patchState(f, c.inject); // 저장하지 않은 주입: 저장 기록은 정상 검사 대기 상태
+    expectFailure(f, 'CONFIRM_INSPECTION', undefined, c);
+    assert.equal(storage.data.get(TYCOON.core.AUTOSAVE_KEY), saved);
+
+    const resumed = new TutorialFlow({ rng: seeded(1) });
+    const save = new TYCOON.core.BrowserSave({ storage });
+    assert.deepEqual(save.restore(resumed), { ok: true });
+    const record = JSON.parse(saved);
+    assert.deepEqual(resumed.state.toJSON(), record.gameState);
+    assert.deepEqual(resumed.meta, record.meta);
+    const v = resumed.view();
+    assert.equal(v.pending, 'INSPECTION');
+    assert.equal(v.project.status, 'INSPECTING');
+    assert.equal(v.project.inspection, null);
+    assert.equal(v.evaluation, null);
+    assert.equal(storage.data.get(TYCOON.core.AUTOSAVE_KEY), saved, '복원은 저장 기록을 바꾸지 않음');
+
+    save.attach(resumed);
+    assert.ok(resumed.dispatch('CONFIRM_INSPECTION').ok);
+    assert.equal(resumed.state.getBudget(), budget - c.supplement);
+    assert.equal(resumed.state.getEvaluation().grade, c.grade);
+    assert.deepEqual(JSON.parse(storage.data.get(TYCOON.core.AUTOSAVE_KEY)).gameState, resumed.state.toJSON());
+  });
+}
+
 test('계약: System 밖 실패는 FLOW_REASON (알 수 없는 명령, 처리 중 재호출, 예외, reason 없는 실패)', () => {
   const f = start();
   expectFailure(f, 'NO_SUCH_COMMAND', undefined, { reason: FLOW_REASON.UNKNOWN_COMMAND, error: '알 수 없는 명령: NO_SUCH_COMMAND' });

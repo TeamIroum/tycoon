@@ -351,7 +351,7 @@ async function withBrowser(scenario) {
       await evaluate(kind==='specs'
         ? "(()=>{const c=TYCOON.app.flow.state.getContract();c.specs=[];TYCOON.app.flow.state.setContract(c)})()"
         : "(()=>{const s=TYCOON.app.flow.state.toJSON();s.gameState.budget=17;TYCOON.app.flow.state.load(s)})()");
-      const before=await evaluate("({gs:TYCOON.app.flow.state.toJSON(),meta:structuredClone(TYCOON.app.flow.meta)})");
+      const before=await evaluate("({gs:TYCOON.app.flow.state.toJSON(),meta:structuredClone(TYCOON.app.flow.meta),raw:localStorage.getItem(TYCOON.core.AUTOSAVE_KEY)})");
       await evaluate("(()=>{window.__qaFlowEvents=[];TYCOON.app.flow.subscribe((_,events)=>window.__qaFlowEvents.push(...events))})()");
       await click('inspect');
       const check=await evaluate("({gs:TYCOON.app.flow.state.toJSON(),meta:TYCOON.app.flow.meta,events:window.__qaFlowEvents.slice(),toast:TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).toast,fatal:TYCOON.app.flow.fatal,status:TYCOON.app.flow.state.getProjectStatus(),delivery:TYCOON.app.flow.state.getDelivery()})");
@@ -359,7 +359,42 @@ async function withBrowser(scenario) {
       assert.match(check.toast.text,kind==='budget'?/집행 가능액이 부족합니다/:/계약 규격/);
       assert.equal(check.delivery.inspection,undefined);
       await capture(kind==='budget'?'budget-failure-toast':'inspection-failure-toast');
-      return {status:check.status,toast:check.toast.text,rollback:'GameState/meta equal; no flow events; non-fatal'};
+      // F-11/F-18: 실패한 검사는 저장 기록을 바꾸지 않는다. 새로고침하면 마지막 정상 저장(주입 전, 검사 대기)으로 복원되고 같은 마우스 입력으로 재시도할 수 있다.
+      const saved=await evaluate("localStorage.getItem(TYCOON.core.AUTOSAVE_KEY)");
+      assert.equal(saved,before.raw,'failed inspection rewrote the autosave record');
+      const record=JSON.parse(saved);
+      assert.equal(record.gameState.gameState.currentProject.status,'INSPECTING');
+      await installSaveWriteCounter();
+      await evaluate('window.__qaBeforeReload=true');
+      await send('Page.reload',{ignoreCache:true});
+      await waitFor("!window.__qaBeforeReload&&!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)",'resumed UI after failed inspection reload',20000);
+      const resumed=await persisted();
+      assert.equal(resumed.status.ok,true,`restore status ${JSON.stringify(resumed.status)}`);
+      assert.deepEqual(resumed.gameState,record.gameState,'reload did not restore the last successful save');
+      assert.deepEqual(resumed.meta,record.meta,'reload did not restore saved meta');
+      assert.equal(resumed.raw,saved,'reload rewrote the autosave record');
+      assert.equal(resumed.view.pending,'INSPECTION');assert.equal(resumed.view.project.status,'INSPECTING');
+      assert.equal(resumed.view.project.inspection,null);assert.equal(resumed.view.evaluation,null);
+      assert.equal(await evaluate('window.__qaSaveWrites'),0,'autosave writes during reload mean a command ran');
+      await capture(kind==='budget'?'budget-failure-resumed':'inspection-failure-resumed');
+      await waitFor("!!(TYCOON.app.debugTargets.marker||TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.inspect)",'inspection entry after reload',15000);
+      if(!(await evaluate("!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.inspect")))await click('marker');
+      await click('inspect');
+      await waitFor("TYCOON.app.flow.state.getProjectStatus()==='COMPLETED'",'evaluation after retry');
+      await closeDialogs(['use_started','evaluation']);
+      const retried=await savedNow('inspection retry after reload');
+      const g=retried.gameState.gameState;
+      assert.equal(g.delivery.inspection.passed,true);
+      assert.equal(retried.view.evaluation.grade,kind==='budget'?'C':'S');
+      const supplement=kind==='budget'?18:0;
+      assert.deepEqual(g.delivery.supplement&&g.delivery.supplement.amount||0,supplement);
+      assert.equal(retried.view.budget.spent,retried.view.project.contract.amount+supplement,'contract and supplement must be charged exactly once');
+      assert.notEqual(record.gameState.gameState.facilities.hall&&record.gameState.gameState.facilities.hall.stage,'IMPROVED','hall must not be improved in the saved pre-inspection state');
+      assert.equal(g.facilities.hall.stage,'IMPROVED','hall improved after retry');
+      assert.ok(await evaluate('window.__qaSaveWrites')>=1,'successful retry was not autosaved');
+      await capture(kind==='budget'?'budget-failure-retried':'inspection-failure-retried');
+      return {status:check.status,toast:check.toast.text,rollback:'GameState/meta equal; no flow events; non-fatal',
+        reload:'restored last successful save (INSPECTING, pending INSPECTION, no inspection result)',retry:{grade:retried.view.evaluation.grade,supplement,budgetSpent:retried.view.budget.spent}};
     };
     // ---------- F-18 추가 복원 시점: 2월차 일부 납품 대응 중, 튜토리얼 END (진행은 마우스 입력만, 상태 주입 없음) ----------
     // 새 문서마다 페이지 스크립트보다 먼저 실행되어 자동 저장 쓰기 횟수를 센다. 복원만으로는 쓰기(=성공 명령)가 없어야 한다.

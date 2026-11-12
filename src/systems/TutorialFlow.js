@@ -145,7 +145,8 @@
         if (this.progress.date().pending !== 'INSPECTION') return { ok: false, reason: REASON.INVALID_STATE };
         const r = this.delivery.inspect();
         if (!r.ok) {
-          if (r.reason === REASON.INSUFFICIENT_BUDGET) return { ...r, message: REASON_TEXT[REASON.INSUFFICIENT_BUDGET] };
+          // 검사 판정 실패(NOT_ELIGIBLE)만 INSPECTION_FAILED로 바꾸고, 예산 부족·상태 불일치 등은 원래 사유를 그대로 전달한다.
+          if (r.reason !== REASON.NOT_ELIGIBLE) return r;
           return { ...r, message: (r.detail && r.detail.findings || []).join(' ') || REASON_TEXT[REASON.INSPECTION_FAILED], reason: REASON.INSPECTION_FAILED };
         }
         const evaluation = this.evaluation.calculateGrade();
