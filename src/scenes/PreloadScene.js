@@ -33,6 +33,10 @@
     }
 
     create() {
+      // 실제 이미지 로딩이 끝난 뒤 인물·트럭 임시 텍스처를 만든다. Phaser 3.80.1의 generateTexture는 같은 키의
+      // 이미지 텍스처를 덮어쓰지 않으므로, 실제 이미지가 있는 키는 그대로 두고 없거나 로드에 실패한 키만 채운다.
+      // Phaser 버전을 바꾸면 tests/browser/texture-fallback-cdp.mjs로 다시 확인한다.
+      TYCOON.ui.art.makeTextures(this);
       if (TYCOON.app.resumeOnLoad) {
         TYCOON.app.resumeOnLoad = false;
         TYCOON.app.pendingEvents = [];

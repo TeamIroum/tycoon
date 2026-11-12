@@ -574,7 +574,7 @@ TYCOON.app.store.dispatch('명령', payload);
 **등록과 시작 순서**
 
 - 스크립트는 `index.html`의 `<script>` 순서로 불러오고, Scene 목록은 `src/main.js`의 `[Boot, Preload, Title, Office, Village, Hall, UI, Ending]`이다. 두 파일은 팀원 1이 관리하며 새 스크립트·Scene은 팀원 1이 함께 등록한다. 제출 오프라인 ZIP 검사(F-19)는 `index.html`이 참조하는 파일과 `ASSETS`의 `url`을 기준으로 한다.
-- `BootScene`이 `TYCOON.ui.art.makeTextures()`로 임시 인물·트럭 텍스처를 만들고, `PreloadScene`이 `src/config/assets.js`의 `ASSETS`를 불러온다.
+- `BootScene`은 GameState 확인 후 `PreloadScene`으로 넘긴다. `PreloadScene.preload()`가 `src/config/assets.js`의 `ASSETS`를 불러오고, 로딩이 끝난 `PreloadScene.create()` 첫 줄에서 `TYCOON.ui.art.makeTextures()`로 임시 인물·트럭 텍스처를 만든다(아래 "텍스처 로딩 순서와 폴백").
 - 저장 복원에 성공하면 `PreloadScene`이 `resumeOnLoad`를 `false`로 바꾸고 `OfficeScene`과 `UIScene`을 바로 실행한다. 아니면 `TitleScene` → '새로 시작' → `flow.newGame()`, `pendingEvents = ['GAME_STARTED']` → `OfficeScene` 시작, `UIScene` 실행 순서다.
 
 **월드 화면 전환**
@@ -597,13 +597,21 @@ TYCOON.app.store.dispatch('명령', payload);
 
 | 함수 | 반환 | 사용처 |
 |---|---|---|
-| `makeTextures(scene)` | 없음. 인물 텍스처 `<팔레트 키>_<stand·walk0·walk1·sit·lie>`와 `truck` 생성 | `BootScene`(팀원 1) |
+| `makeTextures(scene)` | 없음. 인물 텍스처 `<팔레트 키>_<stand·walk0·walk1·sit·lie>`와 `truck` 생성. 같은 키의 실제 이미지가 이미 있으면 그 키는 바꾸지 않는다(Phaser 3.80.1 `generateTexture` 동작) | `PreloadScene.create()`(팀원 1) |
 | `drawRegion(scene, view, { ox, oy })` | `{ objs, hit: [{ def: { id, name, role }, x, y }] }`. `id === 'hall'`인 항목을 검사 표식 위치로 쓴다 | `VillageScene`, `EndingScene` |
 | `drawHall(scene, view, opts)` | 표시 객체 배열 | `HallScene`, `EndingScene` |
 | `drawOffice(scene, view, { ox, oy })` | `{ objs, seat2, door, ... }`. `seat2`는 두 번째 업무석 좌표 | `OfficeScene`, `EndingScene` |
 | `iso`, `Walker`, `regionPaths` | 좌표 변환, 걷는 인물, 지역 경로 | 지역·관청 Scene |
 
-`art.js`는 표시 문구 일부를 `TYCOON.ui.SCENARIO`(팀원 3의 `viewData.js`)에서 읽는다. 실제 에셋으로 바꿀 때 위 텍스처 키(`colleague_sit` 등)를 쓰는 화면이 있으므로 키를 유지하거나 사용처와 함께 바꾼다.
+`art.js`는 표시 문구 일부를 `TYCOON.ui.SCENARIO`(팀원 3의 `viewData.js`)에서 읽는다. 위 텍스처 키(`colleague_sit`, `truck`, `<팔레트 키>_<자세>`)는 `OfficeScene`, `EndingScene`, `VillageScene`, `Walker`가 사용한다.
+
+**텍스처 로딩 순서와 폴백**
+
+- 순서: `PreloadScene.preload()`에서 `ASSETS` 이미지 로드 → `PreloadScene.create()`에서 `makeTextures()` → 타이틀 또는 저장 복원 화면.
+- 실제 이미지 우선: `ASSETS`에 임시 텍스처와 같은 키(예: `truck`, `colleague_sit`, `resident_a_stand`)로 등록한 이미지가 로드되면 그 이미지를 쓴다. 팀원 2는 기존 텍스처 키를 그대로 쓰면 되고 사용처 코드는 바꾸지 않는다.
+- 폴백: 등록하지 않았거나 파일이 없거나 경로가 잘못돼 로드에 실패한 키는 임시 캔버스 텍스처로 채운다. 로드 실패는 `[Preload] 에셋을 불러오지 못했습니다` 콘솔 오류로 남고 게임은 계속 진행된다.
+- 근거와 한계: Phaser 3.80.1의 `Graphics.generateTexture()`는 같은 키가 이미 있을 때 캔버스 텍스처만 다시 그리고 이미지 텍스처는 그대로 둔다. 이 동작에 기대므로 Phaser 버전을 바꾸면 `tests/browser/texture-fallback-cdp.mjs`로 다시 확인한다.
+- 이력: 2026-11-12 이전에는 `BootScene`이 임시 텍스처를 먼저 만들어, 같은 키의 이미지가 로더에서 오류 없이 제외되는 문제가 있었다(재현 후 같은 날 해결).
 
 ---
 
