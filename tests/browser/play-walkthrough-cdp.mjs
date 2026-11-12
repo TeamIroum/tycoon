@@ -30,7 +30,13 @@ async function withBrowser(scenario) {
     const send=(method,params={})=>new Promise((res,rej)=>{const n=++id;pending.set(n,{resolve:res,reject:rej});ws.send(JSON.stringify({id:n,method,params}))});
     await send('Runtime.enable');await send('Page.enable');
     const evaluate=async(expression)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.text);return r.result.value};
-    const waitFor=async(expression,label=expression,timeout=10000)=>{const start=Date.now();while(Date.now()-start<timeout){const value=await evaluate(expression).catch(()=>false);if(value)return value;await delay(100)}throw new Error(`Timed out waiting for ${label}`)};
+    // 대기 시간 초과 시 Scene·진행 상태·UI 버튼·대화·저장 상태를 함께 출력한다.
+    const diagnose=()=>evaluate(`(()=>{try{const T=window.TYCOON,K=T.config.SCENE_KEYS,g=T.app.game,u=g.scene.getScene(K.UI),v=T.app.flow.view();
+      return {scenes:g.scene.getScenes(false).map(s=>s.sys.settings.key+':'+s.sys.settings.status+(s.sys.isActive()?':active':'')),
+        view:{month:v.month,phase:v.phase,pending:v.pending,status:v.project.status,grade:v.evaluation&&v.evaluation.grade,headcount:v.staff.headcount,fatal:!!v.fatal},
+        ui:u?{view:u.view,popup:u.popup,targets:Object.keys(u.targets||{}),dialog:u.dialog&&u.dialog.isOpen()?(u.dialog.current&&u.dialog.current.id):null}:null,
+        resumeOnLoad:T.app.resumeOnLoad,save:T.app.autoSave&&T.app.autoSave.lastResult,debugTargets:Object.keys(T.app.debugTargets||{})}}catch(e){return {diagnoseError:String(e)}}})()`).catch((e)=>({evaluateError:e.message}));
+    const waitFor=async(expression,label=expression,timeout=10000)=>{const start=Date.now();while(Date.now()-start<timeout){const value=await evaluate(expression).catch(()=>false);if(value)return value;await delay(100)}throw new Error(`Timed out after ${timeout}ms waiting for ${label}\n${JSON.stringify({diagnostics:await diagnose(),consoleErrors},null,2)}`)};
     await waitFor('!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)','TYCOON file page');
     const viewport=await evaluate("({width:innerWidth,height:innerHeight,canvas:(()=>{const c=document.querySelector('canvas'),r=c.getBoundingClientRect();return [c.width,c.height,r.width,r.height]})()})");
     assert.deepEqual(viewport,{width:1280,height:720,canvas:[1280,720,1280,720]});
@@ -355,6 +361,237 @@ async function withBrowser(scenario) {
       await capture(kind==='budget'?'budget-failure-toast':'inspection-failure-toast');
       return {status:check.status,toast:check.toast.text,rollback:'GameState/meta equal; no flow events; non-fatal'};
     };
+    // ---------- F-18 추가 복원 시점: 2월차 일부 납품 대응 중, 튜토리얼 END (진행은 마우스 입력만, 상태 주입 없음) ----------
+    // 새 문서마다 페이지 스크립트보다 먼저 실행되어 자동 저장 쓰기 횟수를 센다. 복원만으로는 쓰기(=성공 명령)가 없어야 한다.
+    const installSaveWriteCounter=()=>send('Page.addScriptToEvaluateOnNewDocument',{source:"(()=>{window.__qaSaveWrites=0;const o=Storage.prototype.setItem;Storage.prototype.setItem=function(k){if(k==='tycoon.autosave')window.__qaSaveWrites++;return o.apply(this,arguments)}})()"});
+    const persisted=()=>evaluate("({gameState:TYCOON.app.flow.state.toJSON(),meta:structuredClone(TYCOON.app.flow.meta),view:TYCOON.app.flow.view(),raw:localStorage.getItem(TYCOON.core.AUTOSAVE_KEY),status:TYCOON.app.autoSave.lastResult})");
+    const savedNow=async(label)=>{
+      const x=await persisted();
+      assert.ok(x.raw,`${label}: no autosave record`);
+      assert.equal(x.status.ok,true,`${label}: autosave status ${JSON.stringify(x.status)}`);
+      const record=JSON.parse(x.raw);
+      assert.deepEqual(record.gameState,x.gameState,`${label}: stored GameState differs from live state`);
+      assert.deepEqual(record.meta,x.meta,`${label}: stored meta differs from live meta`);
+      return x;
+    };
+    const uiSnapshot=()=>evaluate(`(()=>{const K=TYCOON.config.SCENE_KEYS,g=TYCOON.app.game,u=g.scene.getScene(K.UI);
+      const texts=(root)=>{const out=[];const walk=(o)=>{if(!o)return;if(typeof o.text==='string'&&o.visible!==false)out.push(o.text);if(o.list)o.list.forEach(walk)};walk(root);return out};
+      const buttons=[];const walkB=(o)=>{if(!o)return;if(typeof o.setEnabled==='function'&&o.list){const t=o.list.find(x=>typeof x.text==='string'),z=o.list.find(x=>x.input);buttons.push({label:t?t.text:null,enabled:!!(z&&z.input.enabled&&z.input.cursor==='pointer')})}if(o.list)o.list.forEach(walkB)};walkB(u.dyn);
+      return {active:Object.fromEntries(['TITLE','OFFICE','VILLAGE','HALL','UI','ENDING'].map(k=>[k,g.scene.isActive(K[k])])),uiView:u.view,popup:u.popup,
+        targets:Object.keys(u.targets||{}).sort(),texts:texts(u.dyn),guide:texts(u.guide),buttons,dialogOpen:!!(u.dialog&&u.dialog.isOpen()),
+        unit:TYCOON.config.BALANCE.currencyUnit,gradeLabels:TYCOON.config.BALANCE.gradeLabels,saveWrites:window.__qaSaveWrites}})()`);
+    const reloadResume=async(label,before)=>{
+      await evaluate('window.__qaBeforeReload=true');
+      await send('Page.reload',{ignoreCache:true});
+      await waitFor("!window.__qaBeforeReload&&!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)",`${label}: resumed Office and UI after reload`,20000);
+      assert.equal(await evaluate('TYCOON.core.AUTOSAVE_KEY'),'tycoon.autosave','save write counter watches the wrong key');
+      const after=await persisted();
+      assert.equal(after.status.ok,true,`${label}: restore status ${JSON.stringify(after.status)}`);
+      assert.deepEqual(after.gameState,before.gameState,`${label}: GameState changed by reload`);
+      assert.deepEqual(after.meta,before.meta,`${label}: meta changed by reload`);
+      assert.deepEqual(after.view,before.view,`${label}: view() changed by reload`);
+      assert.equal(after.raw,before.raw,`${label}: autosave record rewritten by reload`);
+      assert.equal(await evaluate('window.__qaSaveWrites'),0,`${label}: autosave writes during reload mean a command ran`);
+      return after;
+    };
+    const assertNoWritesSinceReload=async(label)=>assert.equal(await evaluate('window.__qaSaveWrites'),0,`${label}: autosave writes after reload without input`);
+    const toPartialDelivery=async()=>{
+      await startGame();await openRequest();
+      for(const b of ['chkResidents','chkUserSpec','chkInventory','chkCondition'])await click(b);
+      await click('confirmQty');
+      await waitFor('TYCOON.app.flow.view().project.quantities!==null','confirmed quantities');
+      await click('popupClose');await click('advance');await closeDialogs(['proposal']);
+      await waitFor("TYCOON.app.flow.view().pending==='PROPOSAL_REVIEW'",'proposal review');
+      await click('sign');await closeDialogs(['contract']);
+      await waitFor("TYCOON.app.flow.view().month===1&&TYCOON.app.flow.view().phase==='REPORT'",'month 1 report');
+      await capture('month1-report');
+      await click('closeReport');await closeDialogs(['month2']);
+      await waitFor("TYCOON.app.flow.view().month===2&&TYCOON.app.flow.view().phase==='PLAN'",'month 2 plan');
+      await click('popupClose');await click('advance');await closeDialogs(['partial']);
+      await waitFor("TYCOON.app.flow.view().pending==='PARTIAL_DELIVERY'",'partial delivery event');
+    };
+    const assertPartialUi=async(label,v,negotiated)=>{
+      await waitFor("(()=>{const u=TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI);return u.popup==='step'&&!!u.targets.negotiate&&!!u.targets.confirmReq})()",`${label}: partial delivery panel redrawn`);
+      const ui=await uiSnapshot();
+      const pd=await evaluate('TYCOON.ui.SCENARIO.project.partialDelivery');
+      const has=(s)=>ui.texts.includes(s), some=(s)=>[...ui.texts,...ui.guide].some((t)=>t.includes(s));
+      const button=(name)=>ui.buttons.filter((b)=>b.label===name);
+      assert.equal(ui.active.UI&&ui.active.OFFICE,true,`${label}: scenes ${JSON.stringify(ui.active)}`);
+      assert.equal(ui.uiView,'OfficeScene');assert.equal(ui.dialogOpen,false,`${label}: dialog reopened after reload`);
+      assert.ok(has('2월차 진행 중'),`${label}: phase label`);
+      assert.ok(has('진행 업무 1건'),`${label}: active work count`);
+      assert.ok(has(`집행 가능 ${v.budget.total-v.budget.spent}${ui.unit} / ${v.budget.total}${ui.unit}`),`${label}: budget label`);
+      assert.ok(has(`매트  ${v.project.delivered.mattress} / ${v.project.contract.quantities.mattress}개`),`${label}: mattress delivery`);
+      assert.ok(has(`침구  ${v.project.delivered.bedding} / ${v.project.contract.quantities.bedding}세트`),`${label}: bedding delivery`);
+      assert.ok(has('확인 전'),`${label}: requester not confirmed yet`);
+      assert.deepEqual(button('요청기관에 확인'),[{label:'요청기관에 확인',enabled:true}],`${label}: requester button`);
+      if(negotiated){
+        assert.ok(has(pd.supplierAnswer),`${label}: supplier answer kept`);
+        assert.deepEqual(button('확인함'),[{label:'확인함',enabled:false}],`${label}: supplier response shown as done`);
+        assert.deepEqual(button('일정 협의'),[],`${label}: negotiation offered again`);
+        assert.ok(some('[지급 순서 확인]'),`${label}: guide points to requester confirmation`);
+      }else{
+        assert.ok(has('협의 전'),`${label}: supplier not negotiated yet`);
+        assert.deepEqual(button('일정 협의'),[{label:'일정 협의',enabled:true}],`${label}: negotiation button`);
+        assert.ok(some('[일정 협의]'),`${label}: guide points to negotiation`);
+      }
+      return {phaseLabel:'2월차 진행 중',delivered:`${v.project.delivered.mattress}/${v.project.contract.quantities.mattress}, ${v.project.delivered.bedding}/${v.project.contract.quantities.bedding}`,buttons:ui.buttons.filter((b)=>['확인함','일정 협의','요청기관에 확인'].includes(b.label))};
+    };
+    const autosavePartialDelivery=async()=>{
+      await installSaveWriteCounter();
+      await toPartialDelivery();
+      const arrival=await savedNow('partial delivery arrival');
+      const g0=arrival.gameState.gameState;
+      assert.equal(arrival.view.month,2);assert.equal(arrival.view.phase,'PAUSED');assert.equal(arrival.view.pending,'PARTIAL_DELIVERY');
+      assert.ok(arrival.view.project.delivered.bedding<arrival.view.project.contract.quantities.bedding,'partial delivery should be short');
+      await capture('arrival-before-reload');
+      await reloadResume('partial arrival',arrival);
+      const arrivalUi=await assertPartialUi('partial arrival',arrival.view,false);
+      await assertNoWritesSinceReload('partial arrival');
+      await capture('arrival-resumed');
+
+      await click('negotiate');
+      await waitFor('TYCOON.app.flow.view().project.event.supplierNegotiated','supplier negotiation after resume');
+      const negotiated=await savedNow('supplier negotiated');
+      const g1=negotiated.gameState.gameState;
+      assert.deepEqual(negotiated.view.project.event,{supplierNegotiated:true,requesterConfirmed:false});
+      assert.equal(negotiated.view.pending,'PARTIAL_DELIVERY');
+      assert.deepEqual(negotiated.view.budget,arrival.view.budget,'negotiation changed budget');
+      assert.deepEqual(g1.delivery.delivered,g0.delivery.delivered,'negotiation alone changed delivered quantities');
+      assert.deepEqual(g1.contract,g0.contract,'contract changed during partial delivery');
+      assert.ok(g1.delivery.issues.some((i)=>!i.resolved),'issue resolved before both responses');
+      await capture('negotiated-before-reload');
+      await reloadResume('partial negotiated',negotiated);
+      const negotiatedUi=await assertPartialUi('partial negotiated',negotiated.view,true);
+      await assertNoWritesSinceReload('partial negotiated');
+      await capture('negotiated-resumed');
+
+      // 새로고침 후 다음 단계 진행: 요청기관 확인 → 검사 → 평가
+      await click('confirmReq');await closeDialogs(['inspection']);
+      await waitFor("TYCOON.app.flow.view().pending==='INSPECTION'&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.VILLAGE)",'inspection after resumed partial delivery');
+      const inspecting=await savedNow('requester confirmed after resume');
+      const g2=inspecting.gameState.gameState;
+      assert.deepEqual(inspecting.view.project.delivered,inspecting.view.project.contract.quantities,'delivery not completed to contract quantities');
+      assert.deepEqual(inspecting.view.budget,negotiated.view.budget,'delivery response charged budget');
+      assert.equal(g2.delivery.issues.length,g1.delivery.issues.length,'delivery issues duplicated');
+      assert.ok(g2.delivery.issues.every((i)=>i.resolved));
+      assert.deepEqual(g2.contract,g0.contract,'contract duplicated or changed');
+      assert.equal(g2.currentProject.status,'INSPECTING');
+      await waitFor('!!TYCOON.app.debugTargets.marker','inspection marker',12000);
+      await click('marker');
+      await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.inspect','inspection button');
+      await click('inspect');
+      await waitFor("TYCOON.app.flow.state.getProjectStatus()==='COMPLETED'",'evaluation after resumed partial delivery');
+      await closeDialogs(['use_started','evaluation']);
+      const evaluated=await savedNow('evaluation after resume');
+      assert.equal(evaluated.view.evaluation.grade,'S');assert.equal(evaluated.view.evaluation.passed,true);
+      assert.equal(evaluated.view.project.supplement,null);
+      assert.equal(evaluated.view.budget.spent,evaluated.view.project.contract.amount,'budget spent must equal exactly one contract payment');
+      await capture('evaluated-after-resume');
+      return {reloads:['partial delivery arrival (no response)','supplier negotiated, requester not confirmed'],
+        restored:{month:negotiated.view.month,phase:negotiated.view.phase,pending:negotiated.view.pending,event:negotiated.view.project.event,delivered:negotiated.view.project.delivered,budgetSpent:negotiated.view.budget.spent},
+        ui:{arrival:arrivalUi,negotiated:negotiatedUi},saveWritesDuringReload:0,
+        afterResume:{inspection:'requester confirmed by mouse, delivery completed, no extra charge',grade:evaluated.view.evaluation.grade,budgetSpent:evaluated.view.budget.spent,contractAmount:evaluated.view.project.contract.amount}};
+    };
+    const officeSeat=()=>evaluate("(()=>{const g=TYCOON.app.game,o=g.scene.getScene(TYCOON.config.SCENE_KEYS.OFFICE),objs=o.objs||[];return {active:o.sys.isActive(),arrived:g.registry.get('colleagueArrived')===true,walking:!!o.walker&&o.walker.sprite.texture.key!=='colleague_sit',seated:(o.walker&&o.walker.sprite.texture.key==='colleague_sit')||objs.some(x=>x.texture&&x.texture.key==='colleague_sit'),emptySeatTag:objs.some(x=>x.text==='정비 전 업무석')}})()");
+    const assertEndUi=async(label,v)=>{
+      await waitFor("(()=>{const u=TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI);return u.popup==='step'&&!!u.targets.ending})()",`${label}: END panel redrawn`);
+      const ui=await uiSnapshot();
+      const has=(s)=>ui.texts.includes(s);
+      const h=v.staff.hired;
+      assert.equal(ui.active.UI&&ui.active.OFFICE,true,`${label}: scenes ${JSON.stringify(ui.active)}`);
+      assert.equal(ui.dialogOpen,false,`${label}: dialog reopened after reload`);
+      assert.ok(has('튜토리얼 완료'),`${label}: END phase label`);
+      assert.ok(has('진행 업무 0건'),`${label}: active work count`);
+      assert.ok(has(`종합 등급 ${v.evaluation.grade} ${ui.gradeLabels[v.evaluation.grade]}`),`${label}: grade label`);
+      assert.ok(has(`집행 가능 ${v.budget.total-v.budget.spent}${ui.unit} / ${v.budget.total}${ui.unit}`),`${label}: budget label`);
+      assert.ok(has('첫 동료 선발 완료'),`${label}: completion panel title`);
+      assert.ok(ui.texts.some((t)=>t.startsWith(`${h.name}(${h.specialty})이 두 번째 업무석에 앉았습니다.`)),`${label}: hired colleague text`);
+      assert.deepEqual(ui.buttons.filter((b)=>b.label==='마무리 장면 보기'),[{label:'마무리 장면 보기',enabled:true}]);
+      for(const gone of ['hire','cand0','cand1','cand2','closeReport','inspect'])assert.equal(ui.targets.includes(gone),false,`${label}: progress button ${gone} still offered`);
+      // 월 진행 버튼은 항상 그려지지만 END에서는 '진행 완료'로 비활성이어야 한다.
+      assert.deepEqual(ui.buttons.filter((b)=>b.label==='진행 완료'),[{label:'진행 완료',enabled:false}],`${label}: month advance button must be disabled`);
+      await waitFor("(()=>{const o=TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.OFFICE);return TYCOON.app.game.registry.get('colleagueArrived')===true||(o.objs||[]).some(x=>x.texture&&x.texture.key==='colleague_sit')})()",`${label}: colleague seated in office`,15000);
+      const seat=await officeSeat();
+      assert.equal(seat.seated,true,`${label}: colleague not seated ${JSON.stringify(seat)}`);
+      assert.equal(seat.emptySeatTag,false,`${label}: empty-seat tag shown`);
+      return {phaseLabel:'튜토리얼 완료',grade:`${v.evaluation.grade} ${ui.gradeLabels[v.evaluation.grade]}`,colleague:`${h.name}(${h.specialty})`,endingButtonEnabled:true,progressButtonsOffered:false,seat};
+    };
+    const autosaveEnd=async()=>{
+      await installSaveWriteCounter();
+      await startGame();await openRequest();await prepareInspection(false);
+      await click('inspect');
+      await waitFor("TYCOON.app.flow.state.getProjectStatus()==='COMPLETED'",'evaluation');
+      await closeDialogs(['use_started','evaluation']);
+      await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.closeReport','evaluation report button');
+      await click('closeReport');await closeDialogs(['recruit']);
+      await waitFor("TYCOON.app.flow.view().phase==='RECRUIT'",'recruit selection');
+      await click('cand1');
+      await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).selected!==null",'candidate selection');
+      const chosen=await evaluate("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).selected");
+      await click('hire');
+      await waitFor("TYCOON.app.flow.view().phase==='END'&&TYCOON.app.flow.view().staff.headcount===2",'tutorial END');
+      await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.ending','END panel',8000);
+      await waitFor("TYCOON.app.game.registry.get('colleagueArrived')===true",'colleague walked to seat before reload',15000);
+      const end=await savedNow('tutorial END');
+      const g=end.gameState.gameState;
+      assert.equal(end.view.phase,'END');assert.equal(end.view.evaluation.grade,'S');assert.equal(end.view.evaluation.passed,true);
+      assert.equal(end.view.staff.hired.id,chosen);assert.equal(g.staff.headcount,2);assert.equal(g.staff.hired.length,1);
+      assert.equal(g.candidates.length,3);assert.equal(g.facilities.hall.stage,'IMPROVED');assert.equal(g.currentProject.status,'COMPLETED');
+      assert.equal(end.view.region.secondSeat,true);
+      await capture('end-before-reload');
+
+      await reloadResume('tutorial END',end);
+      const replayedArrival=(await officeSeat()).walking;
+      const endUi=await assertEndUi('tutorial END',end.view);
+      await assertNoWritesSinceReload('tutorial END');
+      await capture('end-resumed');
+
+      // 엔딩 화면 표시, 엔딩 도중 새로고침해도 END 상태로 복원
+      await click('ending');
+      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene after resumed END');
+      await click('endingNext');
+      await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===1",'colleague ending panel');
+      const endingTexts=await evaluate("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).objs.filter(o=>typeof o.text==='string').map(o=>o.text)");
+      assert.ok(endingTexts.includes('두 번째 업무석'),'ending colleague caption');
+      assert.ok(endingTexts.some((t)=>t.startsWith(end.view.staff.hired.name+'(')),'ending shows hired colleague');
+      await capture('ending-colleague-after-resume');
+      await reloadResume('reload during ending scene',end);
+      await assertEndUi('reload during ending scene',end.view);
+      await assertNoWritesSinceReload('reload during ending scene');
+
+      // 엔딩을 마치고 새 게임 → 저장이 새 게임 상태로 교체
+      await click('ending');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene');
+      await click('endingNext');await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===1",'ending step 1');
+      await click('endingNext');await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===2",'ending step 2');
+      await closeDialogs(['ending']);
+      await click('endingNext');
+      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)','title after ending');
+      await click('titleStart');
+      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)','new game UI');
+      await closeDialogs(['intro']);
+      const fresh=await savedNow('new game after END');
+      const f=fresh.gameState.gameState;
+      assert.notEqual(fresh.raw,end.raw);
+      assert.equal(fresh.view.month,1);assert.equal(fresh.view.phase,'PLAN');assert.equal(fresh.view.project.status,'REQUESTED');
+      assert.equal(fresh.view.budget.spent,0);assert.equal(f.contract,null);assert.equal(f.delivery,null);assert.equal(f.evaluation,null);
+      assert.equal(f.candidates,null);assert.deepEqual(f.staff.hired,[]);assert.equal(f.staff.headcount,1);assert.equal(f.facilities.hall.stage,'BEFORE');
+      assert.deepEqual(fresh.meta.seenDialogs,['intro'],'old dialog history kept after new game');
+      await reloadResume('new game after END',fresh);
+      const freshUi=await uiSnapshot();
+      assert.ok(freshUi.texts.includes('1월차 월초 계획'),'new game phase label after reload');
+      assert.equal(freshUi.targets.includes('ending'),false,'END panel shown after new game reload');
+      await capture('new-game-resumed');
+      return {reloads:['tutorial END','during ending scene (colleague panel)','new game after END'],
+        restored:{phase:end.view.phase,grade:end.view.evaluation.grade,headcount:g.staff.headcount,hired:end.view.staff.hired.id,candidates:g.candidates.length,hall:g.facilities.hall.stage,budgetSpent:end.view.budget.spent},
+        ui:endUi,colleagueArrivalReplayedAfterReload:replayedArrival,saveWritesDuringReload:0,
+        newGame:{replacedSave:true,month:fresh.view.month,phase:fresh.view.phase,headcount:f.staff.headcount,restoredAsNewGame:true}};
+    };
+    if(scenario==='autosave-partial-delivery'||scenario==='autosave-end'){
+      const result=scenario==='autosave-end'?await autosaveEnd():await autosavePartialDelivery();
+      assert.deepEqual(consoleErrors,[],'unexpected browser console/page errors');
+      return {...result,consoleErrors};
+    }
     if(scenario==='dialog-input-blocking'){
       const result=await dialogInputBlocking();
       assert.deepEqual(consoleErrors,[],'unexpected browser console/page errors');
@@ -410,7 +647,7 @@ async function withBrowser(scenario) {
   }
 }
 
-const selected=process.argv[2]?[process.argv[2]]:['autosave-continuation','autosave-corrupt','autosave-unavailable','dialog-input-blocking','normal','temp','d-grade','inspection-failure','budget-failure','fatal'];
+const selected=process.argv.length>2?process.argv.slice(2):['autosave-continuation','autosave-partial-delivery','autosave-end','autosave-corrupt','autosave-unavailable','dialog-input-blocking','normal','temp','d-grade','inspection-failure','budget-failure','fatal'];
 for(const scenario of selected){
   const result=await withBrowser(scenario);
   outcomes.push({scenario,...result});

@@ -22,8 +22,19 @@
     INSPECTION_FAILED: 'INSPECTION_FAILED'      // 정식 검사 실패
   });
 
+  /**
+   * TutorialFlow.dispatch()에서만 생기는 실패 이유. System 결과(REASON)와 이름이 겹치지 않는다.
+   * dispatch 실패 반환의 reason은 REASON.* 또는 FLOW_REASON.* 중 하나다.
+   */
+  const FLOW_REASON = Object.freeze({
+    ROLLBACK_FAILED: 'ROLLBACK_FAILED',         // 롤백 실패 또는 fatal 중 명령 (code와 같은 값)
+    COMMAND_BUSY: 'COMMAND_BUSY',               // 이전 명령 처리 중 재호출
+    UNKNOWN_COMMAND: 'UNKNOWN_COMMAND',         // 등록되지 않은 명령
+    COMMAND_FAILED: 'COMMAND_FAILED'            // 처리 중 예외 또는 reason 없는 실패
+  });
+
   const ok = (values = {}) => ({ ok: true, ...values });
   const fail = (reason, detail) => (detail === undefined ? { ok: false, reason } : { ok: false, reason, detail });
 
-  Object.assign(CORE_NS, { REASON, ok, fail });
+  Object.assign(CORE_NS, { REASON, FLOW_REASON, ok, fail });
 })();

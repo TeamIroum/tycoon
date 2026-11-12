@@ -170,6 +170,12 @@
       const project = this.state.getCurrentProject();
       if (!project || project.status !== PROJECT_STATUS.REVIEWING) return fail(REASON.INVALID_STATE);
       if (this.state.getContract()) return fail(REASON.ALREADY_DONE);
+      const proposed = this.state.getSuppliers().find((supplier) => supplier.id === supplierId);
+      if (!proposed) return fail(REASON.NOT_FOUND);
+      if (proposed.price > this.state.getBudget()) {
+        this.state.notify(RESULT_EVENTS.CONTRACT_REJECTED, { supplierId, reason: REASON.INSUFFICIENT_BUDGET });
+        return fail(REASON.INSUFFICIENT_BUDGET);
+      }
       const { rows, winnerId } = this.compareSuppliers();
       const row = rows.find((r) => r.id === supplierId);
       if (!row) return fail(REASON.NOT_FOUND);

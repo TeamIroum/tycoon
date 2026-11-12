@@ -31,6 +31,8 @@
 - Scene/UI에서 규칙을 중복 구현하거나 GameState setter/System을 직접 호출하지 않는다.
 - 기존 코드의 IIFE, 이름 공간, 스크립트 로딩 순서를 유지한다.
 - System 결과는 기존 결과 형식 `{ ok: true, ... }` 또는 `{ ok: false, reason: '...' }`을 따른다.
+- 화면이 받는 `dispatch()` 결과는 성공 `{ ok: true, events }`, 실패 `{ ok: false, error, reason, code? }`다. `reason`은 `REASON` 또는 `FLOW_REASON` 값이고, `error`는 `TutorialFlow`가 정한 기본 안내 문구다. UI는 실패 종류를 `reason`으로 구분하며 `error` 문자열을 비교하지 않는다. `code: 'ROLLBACK_FAILED'`는 기존 호환을 위해 유지한다.
+- 실패한 명령의 상태·결과 이벤트는 롤백과 함께 버리고 외부로 전달하지 않는다. 롤백 뒤 실패 이벤트를 따로 발생시키지 않으며, 실패 정보는 `dispatch()` 반환값으로만 전달한다.
 - 명령 실패와 롤백은 상태 및 meta를 명령 직전 snapshot으로 복원한다. 명령 직전이 `INSPECTING`이면 정상 롤백 뒤에도 그 상태가 유지된다.
 - 복원 자체가 실패한 경우에만 `ROLLBACK_FAILED` fatal 상태로 전환한다. fatal 중 명령은 차단하며 새 게임에서 fatal을 초기화한다.
 
@@ -44,7 +46,8 @@
 ### 저장
 
 - F-18은 GameState 직렬화와 브라우저 저장소 연동을 구분한다. `src/core/BrowserSave.js`가 단일 `localStorage` 슬롯의 자동 저장·복원을 담당한다.
-- 성공한 진행 명령 이후 저장한다. 실패·롤백·fatal을 정상 상태로 저장하지 않는다.
+- 새 게임 시작 시 기존 저장을 교체하고, 성공한 진행 명령마다 저장한다. 실패·롤백·fatal을 정상 상태로 저장하지 않는다.
+- 새로고침 시 마지막으로 성공한 명령 이후의 상태로 복원한다(월중 포함). 복원은 명령을 다시 실행하지 않는다.
 - 저장 실패는 게임 진행을 막지 않고 `saveStatus`를 통해 UI에 전달한다. UI에서 `localStorage`를 직접 다루지 않는다.
 
 ## 5. 담당 파일과 협의
@@ -69,13 +72,13 @@
 & 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe' tests/browser/play-walkthrough-cdp.mjs
 ```
 
-기록된 기준은 Node 60개, Chromium CDP 4개 경로, UI E2E 10개 시나리오 통과다. 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
+F-19 제출 도구·실행 파일을 바꿨다면 `tests/browser/submission-cdp.mjs`(압축 해제 후 실행 검증)도 실행한다. 테스트 개수는 완료 조건이 아니며 위 명령의 실제 출력을 기준으로 보고한다(참고 기록: 2026-11-12 기준 Node 100개, Chromium CDP 4개 경로, UI E2E 12개 시나리오, 제출 ZIP 검증 Chrome·Edge 통과). 실제 작업마다 관련 테스트를 다시 실행하고 결과를 구분한다. dispatch 기반 검증을 실제 마우스 플레이로 표현하지 않는다. 미실행·실패는 완료로 보고하지 않는다.
 
 완료 보고에는 목적, 수정 파일별 변경, 실행 명령과 통과·실패·미실행 수, 브라우저 입력 방식, 미해결 위험을 적는다.
 
 ## 7. 제출 및 범위 관리
 
-F-19 오프라인 제출 ZIP 생성과 독립 실행 검증은 완료됐으나 실제 공모전 제출과 GitHub Pages 배포는 별도 작업이다. 제출 파일명에 팀명 자리표시자가 남아 있을 수 있으므로 제출 전 확인한다. 제출 도구는 `tools/make-submission.mjs`를 사용한다. 미확정 공모전 조건은 임의로 정하지 않는다.
+F-19 제출 도구는 `tools/make-submission.mjs`를 사용한다. 기본 ZIP은 Pages로 연결하고, `--with-offline` ZIP은 압축을 푼 `오프라인_실행/index.html`을 연다. 도구는 필수 파일·참조 경로가 빠지면 ZIP을 만들지 않는다. 실제 공모전 제출과 배포본 버전 확인은 별도 작업이다. 제출 파일명에 팀명 자리표시자가 남아 있으면 도구가 경고하므로 제출 전 확인한다. 미확정 공모전 조건은 임의로 정하지 않는다.
 
 기존 정상 동작을 우선 보존하고 요청 범위의 최소 변경만 수행한다. 확정되지 않은 점수·가중치·재도전·후속 시스템을 임의로 추가하지 않는다. 문서 전체를 불필요하게 다시 쓰지 않는다.
 
