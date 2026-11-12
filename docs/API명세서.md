@@ -195,7 +195,7 @@ UI는 `saveStatus`를 읽어 표시만 하며 `localStorage`를 직접 다루지
 - 불러오기 과정에서 후보를 임의로 다시 생성하지 않는다.
 - 후보가 아직 생성되지 않았다면 `null` 상태를 유지하고, 모집 단계에서 `ensureCandidates()`가 생성 여부를 확인한다.
 
-GameState 직렬화 왕복 테스트는 후보 생성 및 채용 상태를 포함한다. 브라우저 CDP 테스트는 계약·평가·채용 저장 후 새로고침 복원, 손상 데이터 폐기, 저장소 쓰기 실패 시 게임 지속을 검증한다.
+GameState 직렬화 왕복 테스트는 후보 생성 및 채용 상태를 포함한다. 브라우저 CDP 테스트는 계약 후, 2월차 일부 납품 대응 중, 평가 후, 채용 후(END), 엔딩 장면 중 새로고침 복원과 END 이후 새 게임의 저장 교체, 손상 데이터 폐기, 저장소 쓰기 실패 시 게임 지속을 검증한다.
 
 ### 상태 변경 이벤트
 
@@ -562,6 +562,44 @@ TYCOON.app.store.dispatch('명령', payload);
 | `reports` | `[{ month, lines: string[] }]` | 월말 보고 문장. 계약 후 1월차, 평가 후 2월차 항목이 추가된다 |
 
 화면은 이 필드를 표시에만 사용하고, 같은 값을 규칙 판단을 위해 다시 계산하지 않는다.
+
+### 6-5. Scene 등록·전환과 Scene 간 연결 (현재 구현)
+
+팀원 2(월드·아트)와 팀원 3(UI) 코드가 서로 주고받는 현재 연결이다. 이름이나 형식을 바꾸면 상대 팀과 팀원 1에 알리고 이 절을 갱신한다.
+
+**등록과 시작 순서**
+
+- 스크립트는 `index.html`의 `<script>` 순서로 불러오고, Scene 목록은 `src/main.js`의 `[Boot, Preload, Title, Office, Village, Hall, UI, Ending]`이다. 두 파일은 팀원 1이 관리하며 새 스크립트·Scene은 팀원 1이 함께 등록한다. 제출 오프라인 ZIP 검사(F-19)는 `index.html`이 참조하는 파일과 `ASSETS`의 `url`을 기준으로 한다.
+- `BootScene`이 `TYCOON.ui.art.makeTextures()`로 임시 인물·트럭 텍스처를 만들고, `PreloadScene`이 `src/config/assets.js`의 `ASSETS`를 불러온다.
+- 저장 복원에 성공하면 `PreloadScene`이 `resumeOnLoad`를 `false`로 바꾸고 `OfficeScene`과 `UIScene`을 바로 실행한다. 아니면 `TitleScene` → '새로 시작' → `flow.newGame()`, `pendingEvents = ['GAME_STARTED']` → `OfficeScene` 시작, `UIScene` 실행 순서다.
+
+**월드 화면 전환**
+
+- 월드 Scene(`OfficeScene`, `VillageScene`, `HallScene`)은 한 번에 하나만 실행된다. `UIScene.switchView(key)`가 현재 월드 Scene을 멈추고 대상을 실행한 뒤 UI를 맨 위로 올린다.
+- 자동 전환: `pending`이 `INSPECTION`이거나 `INSPECTION_READY` 알림이 오면 지역(`VillageScene`), `HIRED` 알림이 오면 관청(`OfficeScene`). 수동 전환: 하단 메뉴(관청·지역 지도·강당)와 지도 영역 클릭.
+- 월드 Scene은 `watchView`로만 상태를 읽는다. 현재 사용하는 필드: 지역 `[region.hallLit, pending, phase]`, 강당 `[region.hallBedded, region.hallLit, project.checks.mattressCondition]`, 관청 `[region.secondSeat, staff.hired.id]`.
+
+**Scene 간 신호 (`game.events`, `registry`)**
+
+| 이름 | 보내는 쪽 → 받는 쪽 | 값 | 용도 |
+|---|---|---|---|
+| `game.events` `'pt:info'` | 지역 → UI | `{ title, lines: string[] }` | 건물 클릭 시 정보 팝업 |
+| `game.events` `'pt:inspect'` | 지역 → UI | 없음 | 학당 검사 표식 클릭 시 검사 패널을 연다. **검사 단계로 넘어가는 유일한 화면 경로**이므로 지역 화면을 바꿀 때 반드시 유지한다 |
+| `game.events` `'pt:marker'` | 지역 → UI | 없음 | 검사 표식 위치가 바뀌었음을 알려 UI를 다시 그리게 한다 |
+| `registry` `'markerPos'` | 지역이 설정, UI가 읽음 | `{ x, y, w, h }` 또는 `null` | 검사 표식 위치. `null`이면 UI는 검사 패널 대신 지역 화면으로 안내한다. 지역 Scene 종료 시 `null` |
+| `registry` `'colleagueArrived'` | 관청 내부 | boolean | 동료 입장 연출을 이미 재생했는지. 저장되지 않으므로 새로고침하면 연출이 다시 재생된다 |
+
+**공용 그리기 함수 (`src/ui/art.js`, 팀원 2 소유)**
+
+| 함수 | 반환 | 사용처 |
+|---|---|---|
+| `makeTextures(scene)` | 없음. 인물 텍스처 `<팔레트 키>_<stand·walk0·walk1·sit·lie>`와 `truck` 생성 | `BootScene`(팀원 1) |
+| `drawRegion(scene, view, { ox, oy })` | `{ objs, hit: [{ def: { id, name, role }, x, y }] }`. `id === 'hall'`인 항목을 검사 표식 위치로 쓴다 | `VillageScene`, `EndingScene` |
+| `drawHall(scene, view, opts)` | 표시 객체 배열 | `HallScene`, `EndingScene` |
+| `drawOffice(scene, view, { ox, oy })` | `{ objs, seat2, door, ... }`. `seat2`는 두 번째 업무석 좌표 | `OfficeScene`, `EndingScene` |
+| `iso`, `Walker`, `regionPaths` | 좌표 변환, 걷는 인물, 지역 경로 | 지역·관청 Scene |
+
+`art.js`는 표시 문구 일부를 `TYCOON.ui.SCENARIO`(팀원 3의 `viewData.js`)에서 읽는다. 실제 에셋으로 바꿀 때 위 텍스처 키(`colleague_sit` 등)를 쓰는 화면이 있으므로 키를 유지하거나 사용처와 함께 바꾼다.
 
 ---
 
