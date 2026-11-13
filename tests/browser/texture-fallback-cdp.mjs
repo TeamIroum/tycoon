@@ -143,7 +143,7 @@ function expectTextures(tex, real) {
 }
 const summarize = (tex, keys) => Object.fromEntries(keys.map((k) => [k, tex[k] && `${tex[k].kind} ${tex[k].w}x${tex[k].h}`]));
 
-// 새 게임 → 끝까지 진행(dispatch) → 새로고침 복원 → 엔딩(마우스) 순서로 텍스처를 확인한다.
+// 새 게임 → 끝까지 진행(dispatch) → 엔딩(마우스) → END 새로고침(타이틀) → 새 게임 → 진행 중 새로고침(관청) 순서로 텍스처를 확인한다.
 async function playSaveRestoreEnding(c, real) {
   await c.click('titleStart');
   await c.waitFor("TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)", 'Office after titleStart');
@@ -152,17 +152,11 @@ async function playSaveRestoreEnding(c, real) {
 const cands=TYCOON.app.flow.state.getCandidates();const r=d('HIRE',{candidateId:cands[0].id});if(!r.ok)throw Error('HIRE:'+r.reason);return true})()`);
   await c.waitFor("TYCOON.app.flow.view().phase==='END'&&TYCOON.app.flow.view().staff.headcount===2", 'END after hire');
   assert.equal(await c.evaluate('TYCOON.app.saveStatus&&TYCOON.app.saveStatus.ok'), true, 'autosave after hire');
-  await c.send('Page.reload');
-  await c.waitFor("!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)", 'Office restored after reload');
-  const restored = await c.evaluate("(()=>{const v=TYCOON.app.flow.view();return {phase:v.phase,headcount:v.staff.headcount}})()");
-  assert.deepEqual(restored, { phase: 'END', headcount: 2 }, 'restored state');
-  const afterRestore = await c.evaluate(TEXTURES);
-  expectTextures(afterRestore, real);
-  // 복원된 관청 화면에서 colleague_sit을 쓰는 객체가 있으면 같은 텍스처인지 확인한다(개수는 OfficeScene 연출에 따름).
+  // END 저장으로 새로고침하면 시작 화면 정책상 타이틀로 가므로, 관청·엔딩 텍스처는 새로고침 전 같은 세션에서 확인한다.
   const office = await c.evaluate(SCENE_USE('OFFICE', 'colleague_sit'));
   for (const o of office) assert.equal(o.kind, real.colleague_sit ? 'image' : 'canvas', 'OfficeScene colleague_sit texture');
   await c.closeDialogs();
-  await c.waitFor('!!TYCOON.app.debugTargets.ending', 'ending button after restore');
+  await c.waitFor('!!TYCOON.app.debugTargets.ending', 'ending button');
   await c.click('ending');
   await c.waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)', 'EndingScene');
   // 엔딩 두 번째 장면(step 1)이 두 번째 업무석에 colleague_sit을 그린다.
@@ -173,7 +167,22 @@ const cands=TYCOON.app.flow.state.getCandidates();const r=d('HIRE',{candidateId:
   assert.ok(ending.length >= 1, 'EndingScene step 1 shows colleague_sit');
   for (const o of ending) assert.deepEqual({ kind: o.kind, w: o.w, h: o.h }, want, 'EndingScene colleague_sit texture');
   assert.ok(ending.every((o) => o.visible), 'EndingScene colleague_sit visible');
-  return { restored, office: office.map((o) => `${o.kind} ${o.w}x${o.h}`), ending: ending.map((o) => `${o.kind} ${o.w}x${o.h}`) };
+  // END 저장으로 새로고침 → 타이틀, 상태 복원, 텍스처 동일
+  await c.send('Page.reload');
+  await c.waitFor("!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)", 'Title after reload with END save');
+  const restored = await c.evaluate("(()=>{const v=TYCOON.app.flow.view();return {phase:v.phase,headcount:v.staff.headcount}})()");
+  assert.deepEqual(restored, { phase: 'END', headcount: 2 }, 'restored END state behind title');
+  expectTextures(await c.evaluate(TEXTURES), real);
+  // 새 게임 → 진행 중 저장으로 새로고침 → 관청 이어 열기, 텍스처 동일
+  await c.click('titleStart');
+  await c.waitFor("TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)", 'Office after new game');
+  await c.closeDialogs();
+  await c.send('Page.reload');
+  await c.waitFor("!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)", 'Office resumed after reload');
+  const resumed = await c.evaluate("(()=>{const v=TYCOON.app.flow.view();return {month:v.month,phase:v.phase,headcount:v.staff.headcount}})()");
+  assert.deepEqual(resumed, { month: 1, phase: 'PLAN', headcount: 1 }, 'in-progress save resumed');
+  expectTextures(await c.evaluate(TEXTURES), real);
+  return { endReload: 'title', restored, resumedNewGame: resumed, office: office.map((o) => `${o.kind} ${o.w}x${o.h}`), ending: ending.map((o) => `${o.kind} ${o.w}x${o.h}`) };
 }
 
 const SCENARIOS = [

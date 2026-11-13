@@ -66,7 +66,7 @@ create() {
 |---|---|---|
 | `flow` | `TutorialFlow` 인스턴스. 화면은 아래 직접 호출 함수와 `view()`만 사용한다 | Title·UI Scene, `viewData` |
 | `autoSave`, `saveStatus` | F-18 저장 상태(2장) | `UIScene` |
-| `resumeOnLoad` | 시작 시 저장 복원 성공 여부. `PreloadScene`이 확인 후 `false`로 바꾸고 관청 화면으로 바로 진입 | `PreloadScene` |
+| `resumeOnLoad` | 시작 시 저장 복원 성공 여부(END 저장 포함). `PreloadScene`이 확인 후 `false`로 바꾸고, `view().phase !== 'END'`이면 관청 화면으로 바로 진입, END면 타이틀로 보낸다 | `PreloadScene` |
 | `pendingEvents` | 다음 `UIScene.create()`에서 재생할 화면 알림 배열. 새 게임 시작 시 `['GAME_STARTED']` | Title·Preload·UI Scene |
 | `debugTargets` | 자동 테스트용 버튼 좌표. 게임 규칙에 쓰지 않는다 | Scene, 브라우저 테스트 |
 | `game` | Phaser.Game 인스턴스 | - |
@@ -199,7 +199,7 @@ UI는 `saveStatus`를 읽어 표시만 하며 `localStorage`를 직접 다루지
 - 불러오기 과정에서 후보를 임의로 다시 생성하지 않는다.
 - 후보가 아직 생성되지 않았다면 `null` 상태를 유지하고, 모집 단계에서 `ensureCandidates()`가 생성 여부를 확인한다.
 
-GameState 직렬화 왕복 테스트는 후보 생성 및 채용 상태를 포함한다. 브라우저 CDP 테스트는 계약 후, 2월차 일부 납품 대응 중, 평가 후, 채용 후(END), 엔딩 장면 중 새로고침 복원과 END 이후 새 게임의 저장 교체, 손상 데이터 폐기, 저장소 쓰기 실패 시 게임 지속을 검증한다.
+GameState 직렬화 왕복 테스트는 후보 생성 및 채용 상태를 포함한다. 브라우저 CDP 테스트는 계약 후, 2월차 일부 납품 대응 중, 평가 후 새로고침 복원, 채용 후(END)·엔딩 장면 중 새로고침 시 타이틀 표시와 END 저장 유지, END 이후 새 게임의 저장 교체와 그 뒤 새로고침 복원, 손상 데이터 폐기, 저장소 쓰기 실패 시 게임 지속을 검증한다.
 
 ### 상태 변경 이벤트
 
@@ -575,7 +575,11 @@ TYCOON.app.store.dispatch('명령', payload);
 
 - 스크립트는 `index.html`의 `<script>` 순서로 불러오고, Scene 목록은 `src/main.js`의 `[Boot, Preload, Title, Office, Village, Hall, UI, Ending]`이다. 두 파일은 팀원 1이 관리하며 새 스크립트·Scene은 팀원 1이 함께 등록한다. 제출 오프라인 ZIP 검사(F-19)는 `index.html`이 참조하는 파일과 `ASSETS`의 `url`을 기준으로 한다.
 - `BootScene`은 GameState 확인 후 `PreloadScene`으로 넘긴다. `PreloadScene.preload()`가 `src/config/assets.js`의 `ASSETS`를 불러오고, 로딩이 끝난 `PreloadScene.create()` 첫 줄에서 `TYCOON.ui.art.makeTextures()`로 임시 인물·트럭 텍스처를 만든다(아래 "텍스처 로딩 순서와 폴백").
-- 저장 복원에 성공하면 `PreloadScene`이 `resumeOnLoad`를 `false`로 바꾸고 `OfficeScene`과 `UIScene`을 바로 실행한다. 아니면 `TitleScene` → '새로 시작' → `flow.newGame()`, `pendingEvents = ['GAME_STARTED']` → `OfficeScene` 시작, `UIScene` 실행 순서다.
+- 시작 화면 분기(`PreloadScene.create()`, 2026-11-13 결정):
+  - 저장 없음·손상·버전 불일치 → `TitleScene`.
+  - 진행 중 저장 복원 성공(`view().phase !== 'END'`) → `resumeOnLoad`를 `false`로 바꾸고 `pendingEvents = []`, `OfficeScene` 시작과 `UIScene` 실행.
+  - 튜토리얼 완료(END) 저장 복원 성공 → `resumeOnLoad`를 `false`로 바꾸고 `TitleScene`. 복원한 END 상태는 메모리에 남고 저장은 지우지 않는다.
+  - `TitleScene` '새로 시작' → `flow.newGame()`, `pendingEvents = ['GAME_STARTED']` → `OfficeScene` 시작, `UIScene` 실행. `GAME_STARTED`로 저장이 새 게임 상태로 교체된다.
 
 **월드 화면 전환**
 

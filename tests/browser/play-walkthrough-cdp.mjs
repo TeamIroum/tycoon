@@ -296,14 +296,21 @@ async function withBrowser(scenario) {
       const hiredSaved=await assertSaved('after hire');
       assert.equal(hiredSaved.gameState.gameState.staff.hired.length,1);
       await capture('autosave-after-hire');
-      await reloadAndCompare('after hire',hiredSaved);
-      await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.ending','resume ending UI');
-      await capture('autosave-resumed-hire');
-
-      // Finish the visual ending, start a fresh game, and confirm it replaced the old slot.
-      await click('ending');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene after resume');
-      await click('endingNext');await click('endingNext');await closeDialogs(['ending']);await click('endingNext');
-      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)','title after ending');
+      // 시작 화면 정책(A안): 엔딩 장면 도중 새로고침하면 END 저장은 그대로 두고 타이틀을 보여 준다.
+      await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.ending','END panel');
+      await click('ending');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene');
+      await click('endingNext');await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===1",'colleague ending panel');
+      await capture('autosave-ending-before-reload');
+      const beforeReload=await evaluate("localStorage.getItem(TYCOON.core.AUTOSAVE_KEY)");
+      assert.deepEqual(JSON.parse(beforeReload).gameState,hiredSaved.gameState,'END save changed by opening the ending');
+      await send('Page.reload',{ignoreCache:true});
+      await waitFor("!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)&&!!TYCOON.app.debugTargets.titleStart",'title after reload with END save',20000);
+      const atTitle=await evaluate("(()=>{const g=TYCOON.app.game,K=TYCOON.config.SCENE_KEYS;return {raw:localStorage.getItem(TYCOON.core.AUTOSAVE_KEY),gameState:TYCOON.app.flow.state.toJSON(),phase:TYCOON.app.flow.view().phase,status:TYCOON.app.autoSave.lastResult,office:g.scene.isActive(K.OFFICE),ui:g.scene.isActive(K.UI),ending:g.scene.isActive(K.ENDING)}})()");
+      assert.equal(atTitle.raw,beforeReload,'END save removed or rewritten by title entry');
+      assert.deepEqual(atTitle.gameState,hiredSaved.gameState,'END state not restored behind title');
+      assert.equal(atTitle.phase,'END');assert.equal(atTitle.status.ok,true);
+      assert.deepEqual([atTitle.office,atTitle.ui,atTitle.ending],[false,false,false],'world/UI/ending scenes started with END save');
+      await capture('autosave-end-title');
       await click('titleStart');
       await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)','new game UI after ending');
       await closeDialogs(['intro']);
@@ -311,7 +318,7 @@ async function withBrowser(scenario) {
       assert.equal(fresh.v.staff.headcount,1);assert.equal(fresh.v.project.contract,null);assert.equal(fresh.v.phase,'PLAN');
       assert.deepEqual(fresh.r.gameState,await evaluate('TYCOON.app.flow.state.toJSON()'));
       assert.equal(fresh.r.meta.seenDialogs.includes('intro'),true);
-      return {fileLocalStorage:storageProbe.ok,checkpoints:['new game','request confirmation','contract','delivery/inspection/evaluation','candidate generation','hire'],reloads:['after contract','after evaluation','after hire'],candidateCount:3,hiredCount:1,newGameReplacedPriorSave:true,saveAfterSuccessfulCommands:true};
+      return {fileLocalStorage:storageProbe.ok,checkpoints:['new game','request confirmation','contract','delivery/inspection/evaluation','candidate generation','hire'],reloads:['after contract','after evaluation','during ending after hire -> title (END save kept)'],candidateCount:3,hiredCount:1,newGameReplacedPriorSave:true,saveAfterSuccessfulCommands:true};
     };
     const autosaveCorrupt=async()=>{
       await startGame();
@@ -426,6 +433,23 @@ async function withBrowser(scenario) {
       assert.deepEqual(after.meta,before.meta,`${label}: meta changed by reload`);
       assert.deepEqual(after.view,before.view,`${label}: view() changed by reload`);
       assert.equal(after.raw,before.raw,`${label}: autosave record rewritten by reload`);
+      assert.equal(await evaluate('window.__qaSaveWrites'),0,`${label}: autosave writes during reload mean a command ran`);
+      return after;
+    };
+    // END 저장으로 새로고침하면 타이틀이 보이고, 저장·상태는 그대로이며 명령(저장 쓰기)도 없어야 한다.
+    const reloadToTitle=async(label,before)=>{
+      await evaluate('window.__qaBeforeReload=true');
+      await send('Page.reload',{ignoreCache:true});
+      await waitFor("!window.__qaBeforeReload&&!!(window.TYCOON&&TYCOON.app&&TYCOON.app.game)&&TYCOON.app.resumeOnLoad===false&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)&&!!TYCOON.app.debugTargets.titleStart",`${label}: title after reload`,20000);
+      await delay(300);
+      const ui=await uiSnapshot();
+      assert.deepEqual(ui.active,{TITLE:true,OFFICE:false,VILLAGE:false,HALL:false,UI:false,ENDING:false},`${label}: only TitleScene should run ${JSON.stringify(ui.active)}`);
+      const after=await persisted();
+      assert.equal(after.status.ok,true,`${label}: restore status ${JSON.stringify(after.status)}`);
+      assert.equal(after.view.phase,'END',`${label}: restored phase`);
+      assert.deepEqual(after.gameState,before.gameState,`${label}: GameState changed by reload`);
+      assert.deepEqual(after.meta,before.meta,`${label}: meta changed by reload`);
+      assert.equal(after.raw,before.raw,`${label}: END save removed or rewritten by title entry`);
       assert.equal(await evaluate('window.__qaSaveWrites'),0,`${label}: autosave writes during reload mean a command ran`);
       return after;
     };
@@ -588,32 +612,19 @@ async function withBrowser(scenario) {
       assert.equal(end.view.region.secondSeat,true);
       await capture('end-before-reload');
 
-      await reloadResume('tutorial END',end);
-      const replayedArrival=(await officeSeat()).walking;
+      // END 완료 화면(새로고침 전, 같은 세션)
       const endUi=await assertEndUi('tutorial END',end.view);
-      await assertNoWritesSinceReload('tutorial END');
-      await capture('end-resumed');
+      await capture('end-before-reload-ui');
 
-      // 엔딩 화면 표시, 엔딩 도중 새로고침해도 END 상태로 복원
-      await click('ending');
-      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene after resumed END');
-      await click('endingNext');
-      await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===1",'colleague ending panel');
-      const endingTexts=await evaluate("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).objs.filter(o=>typeof o.text==='string').map(o=>o.text)");
-      assert.ok(endingTexts.includes('두 번째 업무석'),'ending colleague caption');
-      assert.ok(endingTexts.some((t)=>t.startsWith(end.view.staff.hired.name+'(')),'ending shows hired colleague');
-      await capture('ending-colleague-after-resume');
-      await reloadResume('reload during ending scene',end);
-      await assertEndUi('reload during ending scene',end.view);
-      await assertNoWritesSinceReload('reload during ending scene');
+      // 시작 화면 정책(A안): END 저장으로 새로고침하면 타이틀. 저장은 지우지 않고 명령도 실행하지 않는다.
+      await reloadToTitle('tutorial END',end);
+      await capture('end-reload-title');
+      // 타이틀에서 다시 새로고침해도 END 저장이 남아 있고 타이틀이 보인다.
+      await reloadToTitle('reload again on title',end);
 
-      // 엔딩을 마치고 새 게임 → 저장이 새 게임 상태로 교체
-      await click('ending');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.ENDING)','ending scene');
-      await click('endingNext');await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===1",'ending step 1');
-      await click('endingNext');await waitFor("TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.ENDING).step===2",'ending step 2');
-      await closeDialogs(['ending']);
-      await click('endingNext');
-      await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)','title after ending');
+      // (엔딩 장면 도중 새로고침 → 타이틀은 autosave-continuation 시나리오에서 확인한다.)
+
+      // 타이틀 '새로 시작' → 저장이 새 게임 상태로 교체
       await click('titleStart');
       await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)','new game UI');
       await closeDialogs(['intro']);
@@ -629,9 +640,9 @@ async function withBrowser(scenario) {
       assert.ok(freshUi.texts.includes('1월차 월초 계획'),'new game phase label after reload');
       assert.equal(freshUi.targets.includes('ending'),false,'END panel shown after new game reload');
       await capture('new-game-resumed');
-      return {reloads:['recruit opened (candidates revealed, no hire)','tutorial END','during ending scene (colleague panel)','new game after END'],
+      return {reloads:['recruit opened (candidates revealed, no hire) -> Office','tutorial END -> Title','again on Title -> Title','new game after END -> Office'],
         restored:{phase:end.view.phase,grade:end.view.evaluation.grade,headcount:g.staff.headcount,hired:end.view.staff.hired.id,candidates:g.candidates.length,hall:g.facilities.hall.stage,budgetSpent:end.view.budget.spent},
-        ui:endUi,colleagueArrivalReplayedAfterReload:replayedArrival,saveWritesDuringReload:0,
+        ui:endUi,endSaveKeptOnTitle:true,saveWritesDuringReload:0,
         newGame:{replacedSave:true,month:fresh.view.month,phase:fresh.view.phase,headcount:f.staff.headcount,restoredAsNewGame:true}};
     };
     if(scenario==='autosave-partial-delivery'||scenario==='autosave-end'){

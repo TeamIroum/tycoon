@@ -39,10 +39,14 @@
       TYCOON.ui.art.makeTextures(this);
       if (TYCOON.app.resumeOnLoad) {
         TYCOON.app.resumeOnLoad = false;
-        TYCOON.app.pendingEvents = [];
-        this.scene.start(SCENE_KEYS.OFFICE);
-        this.scene.launch(SCENE_KEYS.UI);
-        return;
+        // 진행 중 저장은 관청 화면으로 바로 이어 연다. 튜토리얼 완료(END) 저장은 타이틀을 보여 주고,
+        // 저장은 지우지 않는다('새로 시작'이 GAME_STARTED로 새 게임 상태로 교체한다).
+        if (TYCOON.app.store.getState().phase !== 'END') {
+          TYCOON.app.pendingEvents = [];
+          this.scene.start(SCENE_KEYS.OFFICE);
+          this.scene.launch(SCENE_KEYS.UI);
+          return;
+        }
       }
       goTo(this, SCENE_KEYS.TITLE);
     }
