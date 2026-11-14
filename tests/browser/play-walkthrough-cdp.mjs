@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { assertTitleOnly, assertGameStarted, LISTENERS, RUNNING_SCENES } from './scene-checks.mjs';
 
 const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const root = process.cwd();
@@ -204,8 +205,16 @@ async function withBrowser(scenario) {
         await waitFor("TYCOON.app.flow.view().phase==='END'",'D tutorial end');
         await capture('d-end');
         assert.equal((await state()).meta.candidates,null);
+        const dEndScenes=await evaluate(RUNNING_SCENES);
+        assert.ok(dEndScenes.includes('VillageScene'),`D end should be reached on the region view: ${JSON.stringify(dEndScenes)}`);
         await click('ending');
-        await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)','D end return to title');
+        // '처음 화면으로' 후 지역 화면이 남아 타이틀을 가리지 않아야 한다(이 경로는 검사 단계에서 지역 화면에 있다).
+        const dTitle=await assertTitleOnly({send,evaluate,waitFor},'D end return to title',{extraFlow:1});
+        await capture('d-title');
+        await click('titleStart');
+        const dRestart=await assertGameStarted({evaluate,waitFor},'new game after D end');
+        await closeDialogs(['intro']);
+        result.titleReturn={before:dEndScenes,title:dTitle,newGame:dRestart};
       }else{
         await waitFor('!!TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI).targets.closeReport','evaluation report button');
         await capture('evaluation-report');
@@ -694,10 +703,14 @@ async function withBrowser(scenario) {
       await evaluate("Storage.prototype.setItem=window.__qaOriginalSetItem");
       await click('fatalNewGame');
       await waitFor("TYCOON.app.flow.fatal===null&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)",'fatal new game recovery');
-      await click('titleStart');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)','fatal recovery new game UI');await closeDialogs(['intro']);
+      const fatalTitle=await assertTitleOnly({send,evaluate,waitFor},'fatal new game recovery');
+      await capture('fatal-title');
+      await click('titleStart');await waitFor('TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)','fatal recovery new game UI');
+      const fatalRestart=await assertGameStarted({evaluate,waitFor},'fatal recovery new game');
+      await closeDialogs(['intro']);
       const recovered=await evaluate("(()=>{const s=TYCOON.app.game.scene.getScene(TYCOON.config.SCENE_KEYS.UI);return {status:TYCOON.app.autoSave.lastResult,warning:s.dyn.list.some(o=>o.text==='진행 상황이 저장되지 않았습니다')}})()");
       assert.equal(recovered.status.ok,true);assert.equal(recovered.warning,false,'old save warning remained after fatal new game recovery');
-      return {fatal:'fatal state shown; CDP mouse activated new game and started a fresh game',state:fatal.state,returnedToTitle:true,oldSaveWarningCleared:true,consoleErrors};
+      return {fatal:'fatal state shown; CDP mouse activated new game and started a fresh game',state:fatal.state,returnedToTitle:true,titleReturn:{title:fatalTitle,newGame:fatalRestart},oldSaveWarningCleared:true,consoleErrors};
     }
     throw new Error(`Unknown UI E2E scenario: ${scenario}`);
   } finally {
