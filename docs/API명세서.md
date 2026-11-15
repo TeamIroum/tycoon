@@ -580,6 +580,7 @@ TYCOON.app.store.dispatch('명령', payload);
   - 진행 중 저장 복원 성공(`view().phase !== 'END'`) → `resumeOnLoad`를 `false`로 바꾸고 `pendingEvents = []`, `OfficeScene` 시작과 `UIScene` 실행.
   - 튜토리얼 완료(END) 저장 복원 성공 → `resumeOnLoad`를 `false`로 바꾸고 `TitleScene`. 복원한 END 상태는 메모리에 남고 저장은 지우지 않는다.
   - `TitleScene` '새로 시작' → `flow.newGame()`, `pendingEvents = ['GAME_STARTED']` → `OfficeScene` 시작, `UIScene` 실행. `GAME_STARTED`로 저장이 새 게임 상태로 교체된다.
+- 타이틀 진입 정리: `TitleScene.create()`는 실행 중(활성·일시정지·잠듦)인 `OfficeScene`, `VillageScene`, `HallScene`, `UIScene`, `EndingScene`을 멈춘다. 어느 화면에서 타이틀로 와도(엔딩 '처음으로', fatal '새 게임 시작', D 등급 '처음 화면으로') 타이틀만 남고, '새로 시작' 뒤에는 `OfficeScene`과 `UIScene`만 실행된다. 멈춘 Scene의 `listenTo`·`game.events` 구독은 각 Scene의 `shutdown`에서 풀린다. 타이틀로 보내는 쪽은 `scene.start(TITLE)`만 호출해도 된다.
 
 **월드 화면 전환**
 

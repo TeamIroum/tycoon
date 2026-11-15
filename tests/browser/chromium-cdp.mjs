@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { assertTitleOnly, assertGameStarted } from './scene-checks.mjs';
 
 const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const profile = await mkdtemp(join(tmpdir(), 'tycoon-cdp-'));
@@ -70,6 +71,7 @@ try {
   await click('titleStart');
   await waitFor("TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.OFFICE)&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.UI)",'Title start button mouse input to open Office and UI scenes');
   await closeDialogs();
+  const firstGame=await assertGameStarted({evaluate,waitFor},'first game');
   await evaluate("TYCOON.app.flow.newGame()");
   const run=(skip,dMode=false)=>evaluate(`(async()=>{const f=TYCOON.app.flow,d=(t,p)=>f.dispatch(t,p); if(${dMode}) f.balance.gradeTable.splice(0,f.balance.gradeTable.length,{min:0,grade:'D'}); for(const c of ['CHECK_RESIDENTS','CHECK_USER_SPEC','CHECK_INVENTORY_COUNT']){const r=d(c);if(!r.ok)throw Error(c+':'+r.error)} if(${skip}){let r=d('CONFIRM_QUANTITIES');if(!r.ok)throw Error(r.error);r=d('CONFIRM_QUANTITIES');if(!r.ok)throw Error(r.error)}else{d('CHECK_MATTRESS_CONDITION');if(!d('CONFIRM_QUANTITIES').ok)throw Error('quantity')} for(const c of ['ADVANCE_MONTH','SIGN_CONTRACT','CLOSE_REPORT','ADVANCE_MONTH','EVENT_NEGOTIATE_SUPPLIER','EVENT_CONFIRM_REQUESTER','CONFIRM_INSPECTION']){const r=d(c);if(!r.ok)throw Error(c+':'+r.error)} const v=f.view(); if(${skip} && !(v.project.supplement.mattress===2&&v.project.supplement.amount===18&&v.project.delivered.mattress===14&&v.project.contract.quantities.mattress===12&&v.project.inspection.passed))throw Error('TEMP outcome mismatch'); if(${dMode} && !(v.evaluation.grade==='D'&&!v.evaluation.passed&&v.project.status==='EVALUATED'&&f.state.getFacilityState('hall').stage==='BEFORE'&&f.state.getStaff().headcount===1&&f.state.getCandidates()===null))throw Error('D outcome mismatch'); if(!${skip}&&!${dMode}&&!(v.evaluation.grade==='S'&&v.evaluation.passed&&f.state.getProjectStatus()==='COMPLETED'))throw Error('normal outcome mismatch'); if(${dMode}){const r=d('CLOSE_REPORT');if(!r.ok||f.view().phase!=='END')throw Error('D ending mismatch')} return {grade:v.evaluation.grade,passed:v.evaluation.passed,contractQty:v.project.contract.quantities.mattress,delivered:v.project.delivered.mattress,supplement:v.project.supplement,inspection:v.project.inspection,projectStatus:f.state.getProjectStatus(),facility:f.state.getFacilityState('hall').stage,phase:f.view().phase};})()`);
   const normal=await run(false,false); await closeDialogs(); await capture('normal-s'); await evaluate('TYCOON.app.flow.newGame()'); await closeDialogs(); const supplement=await run(true,false); await closeDialogs(); await capture('supplement-c'); await evaluate('TYCOON.app.flow.newGame()'); await closeDialogs(); const dGrade=await run(false,true); await closeDialogs(); await capture('grade-d');
@@ -80,11 +82,27 @@ try {
   await waitFor("TYCOON.app.flow.fatal===null&&TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)",'fatalNewGame to reset fatal and return to TitleScene');
   const reset=await evaluate("({fatal:TYCOON.app.flow.fatal,scene:TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.TITLE)})");
   if(reset.fatal!==null||!reset.scene)throw new Error(`Fatal new-game button did not reset to title: ${JSON.stringify(reset)}`);
+  // 타이틀 복귀 후 이전 화면이 남지 않는지(관청·지역·강당에서 각각 fatal). fatal은 상태 주입, 버튼은 CDP 마우스 입력.
+  const titleReturns=[];
+  titleReturns.push({from:'OfficeScene',title:await assertTitleOnly({send,evaluate,waitFor},'fatal from Office')});
+  const injectFatal="(()=>{const f=TYCOON.app.flow;f.state.load=()=>{throw new Error('forced restore failure')};f.procurement.checkResidents=()=>{f.state.spendBudget(1);return TYCOON.core.fail(TYCOON.core.REASON.INVALID_STATE)};const r=f.dispatch('CHECK_RESIDENTS');delete f.state.load;delete f.procurement.checkResidents;return r.code})()";
+  for(const [menu,sceneKey] of [[null,'OFFICE'],['menuRegion','VILLAGE'],['menuHall','HALL']]){
+    await click('titleStart');
+    const started=await assertGameStarted({evaluate,waitFor},`new game before ${sceneKey} fatal`,firstGame.listeners);
+    await closeDialogs();
+    if(menu){await click(menu);await waitFor(`TYCOON.app.game.scene.isActive(TYCOON.config.SCENE_KEYS.${sceneKey})`,`${sceneKey} view`);}
+    if(await evaluate(injectFatal)!=='ROLLBACK_FAILED')throw new Error(`fatal injection failed in ${sceneKey}`);
+    await waitFor('!!TYCOON.app.debugTargets.fatalNewGame','fatal screen');
+    await click('fatalNewGame');
+    titleReturns.push({from:sceneKey,game:started.scenes,title:await assertTitleOnly({send,evaluate,waitFor},`fatal from ${sceneKey}`)});
+  }
+  await click('titleStart');
+  const finalGame=await assertGameStarted({evaluate,waitFor},'new game after repeated title returns',firstGame.listeners);
   const unexpected=browserErrors.filter((e)=>!e.includes('TutorialFlow command failed before rollback:')&&!e.includes('TutorialFlow rollback failed:'));
   if(unexpected.length)throw new Error(`Browser console/page errors: ${unexpected.join(' | ')}`);
   const viewport=await evaluate("({width:innerWidth,height:innerHeight,canvas:(()=>{const c=document.querySelector('canvas'),r=c.getBoundingClientRect();return {logical:[c.width,c.height],css:[r.width,r.height]}})()})");
   if(viewport.width!==1280||viewport.height!==720||viewport.canvas.css[0]!==1280||viewport.canvas.css[1]!==720)throw new Error(`Expected a 1280x720 viewport and canvas, got ${JSON.stringify(viewport)}`);
-  console.log(JSON.stringify({entry:'file://',viewport,startup:timeline,normal,supplement,dGrade,fatal:'ROLLBACK_FAILED shown; command blocked; fatalNewGame activated by CDP mouse input and returned to title',screenshots:screenshotDir||null,unexpectedBrowserErrors:unexpected},null,2));
+  console.log(JSON.stringify({entry:'file://',viewport,startup:timeline,normal,supplement,dGrade,fatal:'ROLLBACK_FAILED shown; command blocked; fatalNewGame activated by CDP mouse input and returned to title',titleReturns,listeners:{firstGame:firstGame.listeners,afterRepeatedReturns:finalGame.listeners},screenshots:screenshotDir||null,unexpectedBrowserErrors:unexpected},null,2));
 } finally {
   // 실패해도 CDP 연결, Chrome 프로세스, 임시 프로필을 정리한다. 정리 실패는 숨기지 않고 stderr에 남긴다.
   if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
