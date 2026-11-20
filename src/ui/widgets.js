@@ -44,9 +44,58 @@
     return t;
   };
 
+  // ---------- UI 키트 그림 (팀원 2 에셋, 9조각 늘이기) ----------
+  // 키는 assets.js의 ui_panel, ui_btn_<paper|teal|gold|red>_<n|h|p|d>(보통·마우스 올림·눌림·비활성).
+  // 그림을 불러오지 못하면 아래 도형 그리기를 그대로 쓴다. Canvas 렌더러라 NineSlice 대신 프레임 9개로 나눠 그린다.
+  // 모서리 두께 [왼, 위, 오른, 아래] (그림 픽셀 기준)
+  let SKIN_INSET = {
+    ui_panel: [17, 17, 17, 17],
+    ui_btn_paper: [10, 8, 10, 10], ui_btn_teal_n: [8, 7, 8, 9], ui_btn_teal_h: [8, 7, 8, 9],
+    ui_btn_teal: [7, 7, 7, 8], ui_btn_gold: [6, 5, 6, 8], ui_btn_red: [6, 5, 6, 8]
+  };
+  function skinInset(key) {
+    return SKIN_INSET[key] || SKIN_INSET[key.replace(/_[nhpd]$/, '')] || [6, 6, 6, 6];
+  }
+  function hasSkin(scene, key) { return !!(scene.textures && scene.textures.exists(key)); }
+  TYCOON.ui.hasSkin = hasSkin;
+
+  // key 그림을 (x, y, w, h)에 9조각으로 늘여 그린 Image 9개를 돌려준다(좌표는 절대값).
+  function nine(scene, key, x, y, w, h) {
+    let tex = scene.textures.get(key), src = tex.getSourceImage();
+    let W = src.width, H = src.height, ins = skinInset(key);
+    let l = ins[0], t = ins[1], r = ins[2], b = ins[3];
+    if (!tex.has('n9_0')) {
+      let xs = [0, l, W - r], ws = [l, W - l - r, r], ys = [0, t, H - b], hs = [t, H - t - b, b];
+      for (let i = 0; i < 9; i++) tex.add('n9_' + i, 0, xs[i % 3], ys[Math.floor(i / 3)], ws[i % 3], hs[Math.floor(i / 3)]);
+    }
+    // 목표가 모서리보다 작으면 모서리를 같은 비율로 줄인다
+    let kx = Math.min(1, w / (l + r)), ky = Math.min(1, h / (t + b));
+    let dl = Math.round(l * kx), dr = Math.round(r * kx), dt = Math.round(t * ky), db = Math.round(b * ky);
+    let dxs = [0, dl, w - dr], dws = [dl, w - dl - dr, dr], dys = [0, dt, h - db], dhs = [dt, h - dt - db, db];
+    let out = [];
+    for (let i = 0; i < 9; i++) {
+      let cw = dws[i % 3], chh = dhs[Math.floor(i / 3)];
+      if (cw <= 0 || chh <= 0) continue;
+      out.push(scene.add.image(x + dxs[i % 3], y + dys[Math.floor(i / 3)], key, 'n9_' + i).setOrigin(0, 0).setDisplaySize(cw, chh));
+    }
+    return out;
+  }
+  TYCOON.ui.nine = nine;
+
   // 한지색 패널. header가 있으면 위쪽에 청록 머리띠를 그린다.
   TYCOON.ui.paper = function (scene, x, y, w, h, opts) {
     opts = opts || {};
+    if (opts.fill === undefined && hasSkin(scene, 'ui_panel')) {
+      let pc = scene.add.container(0, 0);
+      pc.add(nine(scene, 'ui_panel', x, y, w, h));
+      if (opts.header) {
+        let hg = scene.add.graphics();
+        hg.fillStyle(THEME.teal, 1); hg.fillRect(x + 4, y + 4, w - 8, opts.header);
+        hg.fillStyle(THEME.ochre, 1); hg.fillRect(x + 4, y + 4 + opts.header, w - 8, 2);
+        pc.add(hg);
+      }
+      return pc;
+    }
     let g = scene.add.graphics();
     g.fillStyle(THEME.tealDeep, 1); g.fillRect(x, y, w, h);
     g.fillStyle(opts.fill === undefined ? THEME.paper : opts.fill, 1); g.fillRect(x + 4, y + 4, w - 8, h - 8);
@@ -75,9 +124,27 @@
     let enabled = opts.enabled !== false;
     let pressed = false;
     let hover = false;
+    // 키트 그림 색: primary·tab-on = 청록, gold = 금색, accent = 빨강, 나머지 = 종이색
+    let skinColor = { primary: 'teal', 'tab-on': 'teal', gold: 'gold', accent: 'red' }[variant] || 'paper';
+    let useSkin = hasSkin(scene, 'ui_btn_' + skinColor + '_n');
+    let skin = [];
 
     function draw() {
       g.clear();
+      if (useSkin) {
+        skin.forEach(function (o) { o.destroy(); });
+        let st = !enabled ? 'd' : pressed ? 'p' : hover ? 'h' : 'n';
+        let key = 'ui_btn_' + skinColor + '_' + st;
+        if (!hasSkin(scene, key)) key = 'ui_btn_' + skinColor + '_n';
+        skin = nine(scene, key, 0, 0, w, h);
+        c.addAt(skin, 0);
+        let ink = { paper: THEME.css.ink, teal: THEME.css.paper, gold: '#3a2608', red: THEME.css.paper }[skinColor];
+        if (skinColor === 'teal' && st === 'h') ink = '#123a35';
+        if (!enabled) ink = '#5f5a52';
+        t.setColor(ink);
+        t.y = h / 2 + (pressed ? 1 : 0);
+        return;
+      }
       let fill, line, line2 = null, ink = THEME.css.paper;
       if (!enabled) { fill = 0xcfc6b0; line = 0xa89f8a; ink = '#8a8170'; }
       else if (variant === 'primary') { fill = hover ? THEME.tealHi : THEME.teal; line = THEME.tealDeep; }

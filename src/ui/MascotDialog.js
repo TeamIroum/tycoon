@@ -3,8 +3,8 @@
  *
  * - 같은 안내는 한 번만 자동으로 띄운다. 본 목록은 store의 meta에 저장된다.
  * - 떠 있는 동안 화면 전체 입력을 막아 상태 명령이 실행되지 않게 한다.
- * - 초상 자리는 비워 둔다. 나르미·달이는 조달청 공식 원본 이미지로 넣는다
- *   (CLAUDE.md 6장 에셋). 여기서 마스코트를 그리지 않는다.
+ * - 나르미·달이는 팀원 2 에셋(mascot_*)으로 상자 없이 화면 바닥에 세우고, 대사마다 감정에 맞는 표정과 머리 위 이모티콘을 보여 준다(아래 MOODS).
+ *   그림이 없으면 예전처럼 빈 초상 자리를 둔다. 공식 원본 이미지로 바꿀 때는 같은 키로 파일만 교체한다.
  */
 (function () {
   'use strict';
@@ -93,7 +93,7 @@
       dim.fillStyle(0x0b1222, 0.3); dim.fillRect(0, 0, 1280, 720);
       c.add(dim);
 
-      TYCOON.ui.drawMascotBox(scene, c, L, def.speaker, def.kind === 'hint');
+      TYCOON.ui.drawMascotBox(scene, c, L, def.speaker, def.kind === 'hint', { mood: TYCOON.ui.MASCOT_MOOD_OF[this.current.id], line: this.lineIndex });
       c.add(TYCOON.ui.text(scene, L.x + 20, L.y + 14, def.speaker + (this.current.replay ? '  다시 보기' : '') + '  ' + def.title, { size: 14, bold: true, color: def.kind === 'hint' ? T.css.warn : T.css.ok }));
       c.add(TYCOON.ui.text(scene, L.x + 20, L.y + 44, def.lines[this.lineIndex], { size: 15, width: L.w - 40, lineSpacing: 4 }));
       c.add(TYCOON.ui.text(scene, L.x + L.w - 20, L.y + L.h - 22, (this.lineIndex + 1) + ' / ' + def.lines.length + '  Enter 다음  Esc 건너뛰기', { size: 11, color: T.css.muted, origin: [1, 0] }));
@@ -112,21 +112,91 @@
 
   }
 
-  // 좌하단 마스코트 상자: 초상 자리 + 말풍선. 대화와 단계 안내가 같이 쓴다.
-  // 초상은 비워 둔다. 조달청 공식 원본 이미지로 교체한다(CLAUDE.md 6장 에셋).
+  // ---------- 마스코트 표정·이모티콘 (팀원 2 에셋: mascot_<narumi|dali>_<표정>, emote_<이름>) ----------
+  // 입은 움직이지 않는다. 대사 한 줄마다 감정에 맞는 표정 하나를 보여 주고, 머리 위에 이모티콘이 번갈아 떠오른다.
+  // 표정 그림은 한 줄(같은 틀·같은 배율)에서만 골라 크기가 바뀌지 않는다. 바닥(화면 아래)에 맞춰 세운다.
+  // 감정은 대사마다 MASCOT_MOOD_OF로 정한다. 공식 원본 이미지로 바꿀 때는 같은 키로 파일만 교체한다.
+  let MASCOT_OF = { '나르미': 'narumi', '달이': 'dali' };
+  let MASCOT_BODY_X = { narumi: 0.447, dali: 0.543 };   // 그림 안 몸통 가운데(가로 비율)
+  let MASCOT_H = 120;
+  // faces: 줄마다 돌아가며 쓸 표정, emotes: 머리 위에 번갈아 띄울 이모티콘
+  let MOODS = {
+    narumi: {
+      normal: { faces: ['talk', 'happy'], emotes: ['check', 'smile', 'clock'] },
+      greet: { faces: ['wingup', 'excited'], emotes: ['smile', 'heart', 'sparkle'] },
+      explain: { faces: ['point', 'pointsmile'], emotes: ['check', 'cap', 'alert'] },
+      excited: { faces: ['excited', 'happy'], emotes: ['sparkle', 'heart', 'sleep'] }
+    },
+    dali: {
+      normal: { faces: ['smile', 'talk'], emotes: ['check', 'smile', 'clock'] },
+      surprised: { faces: ['surprised'], emotes: ['alert', 'drops', 'clock'] },
+      happy: { faces: ['wave', 'smile'], emotes: ['heart', 'smile', 'check'] }
+    }
+  };
+  TYCOON.ui.MASCOT_MOOD_OF = {
+    intro: 'greet', request: 'normal', hint_wet: 'surprised', proposal: 'explain', contract: 'happy', month2: 'normal',
+    partial: 'surprised', inspection: 'explain', use_started: 'excited', evaluation: 'explain', recruit: 'happy', ending: 'excited'
+  };
+
+  // 이모티콘이 톡 튀어나왔다가 사라지고, 잠시 뒤 다음 이모티콘이 나온다. 마스코트가 지워지면 멈춘다.
+  function runEmotes(scene, container, x, y, list, owner) {
+    let i = Math.floor(Math.random() * list.length), cur = null, timer = null, alive = true;
+    function showNext() {
+      if (!alive) return;
+      let key = 'emote_' + list[i % list.length]; i++;
+      if (!scene.textures.exists(key)) return;
+      let e = scene.add.image(x, y, key).setOrigin(0.5, 1).setScale(0.4).setAlpha(0);
+      cur = e;
+      container.add(e);
+      scene.tweens.add({
+        targets: e, scale: 1, alpha: 1, y: y - 4, duration: 220, ease: 'Back.easeOut',
+        onComplete: function () {
+          if (!alive) return;
+          scene.tweens.add({
+            targets: e, alpha: 0, y: y - 12, delay: 1400, duration: 260,
+            onComplete: function () {
+              if (cur === e) cur = null;
+              e.destroy();
+              if (alive) timer = scene.time.delayedCall(600 + Math.random() * 900, showNext);
+            }
+          });
+        }
+      });
+    }
+    timer = scene.time.delayedCall(120, showNext);
+    owner.once('destroy', function () {
+      alive = false;
+      if (timer) timer.remove(false);
+      if (cur) { scene.tweens.killTweensOf(cur); cur.destroy(); }
+    });
+  }
+
+  // 좌하단 마스코트 + 말풍선. 대화와 단계 안내가 같이 쓴다. 마스코트 그림이 있으면 바깥 상자 없이 세워 둔다.
   TYCOON.ui.DIALOG_LAYOUT = { x: 112, y: 594, w: 412, h: 118 };
-  TYCOON.ui.drawMascotBox = function (scene, container, L, speaker, highlight) {
+  TYCOON.ui.drawMascotBox = function (scene, container, L, speaker, highlight, opts) {
+    opts = opts || {};
     let T = TYCOON.ui.THEME;
-    let g = scene.add.graphics();
-    g.fillStyle(T.tealDeep, 1); g.fillRect(8, L.y - 18, 100, L.h + 18);
-    g.fillStyle(0x2a3550, 1); g.fillRect(12, L.y - 14, 92, L.h + 10);
-    g.lineStyle(2, highlight ? T.ochre : T.teal, 1); g.strokeRect(13, L.y - 13, 90, L.h + 8);
-    container.add(g);
-    container.add(TYCOON.ui.text(scene, 58, L.y + L.h / 2 - 8, speaker + '\n이미지 자리', { size: 12, color: T.css.lightMuted, origin: [0.5, 0.5], align: 'center', lineSpacing: 2 }));
+    let who = MASCOT_OF[speaker];
+    let hasArt = !!(who && scene.textures.exists('mascot_' + who + '_' + MOODS[who].normal.faces[0]));
+    if (!hasArt) {
+      let g = scene.add.graphics();
+      g.fillStyle(T.tealDeep, 1); g.fillRect(8, L.y - 18, 100, L.h + 18);
+      g.fillStyle(0x2a3550, 1); g.fillRect(12, L.y - 14, 92, L.h + 10);
+      g.lineStyle(2, highlight ? T.ochre : T.teal, 1); g.strokeRect(13, L.y - 13, 90, L.h + 8);
+      container.add(g);
+      container.add(TYCOON.ui.text(scene, 58, L.y + L.h / 2 - 8, speaker + '\n이미지 자리', { size: 12, color: T.css.lightMuted, origin: [0.5, 0.5], align: 'center', lineSpacing: 2 }));
+    }
     container.add(TYCOON.ui.paper(scene, L.x, L.y, L.w, L.h));
     let tail = scene.add.graphics();
     tail.fillStyle(T.tealDeep, 1); tail.fillTriangle(L.x, L.y + 40, L.x - 10, L.y + 50, L.x, L.y + 60);
     container.add(tail);
+    if (hasArt) {
+      let m = MOODS[who][opts.mood] || MOODS[who].normal;
+      let face = m.faces[(opts.line || 0) % m.faces.length];
+      let img = scene.add.image(52, 720, 'mascot_' + who + '_' + face).setOrigin(MASCOT_BODY_X[who], 1);
+      container.add(img);
+      runEmotes(scene, container, 52 + 30, 720 - MASCOT_H - 2, m.emotes, img);
+    }
   };
 
   TYCOON.ui.MascotDialog = MascotDialog;

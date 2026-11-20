@@ -192,7 +192,7 @@
     drawRight(s) {
       let self = this;
       let T = TYCOON.ui.THEME;
-      // 지역 지도 (미니). 누르면 지역 화면과 관청을 오간다.
+      // 지역 지도 (미니). 누르면 지역 화면으로 간다.
       this.add2(TYCOON.ui.paper(this, MAP.x, MAP.y, MAP.w, MAP.h, { header: 34 }));
       this.t(MAP.x + 16, MAP.y + 12, '지역 지도', { size: 16, bold: true, color: CSS().paper });
       let g = this.add2(this.add.graphics());
@@ -210,7 +210,8 @@
         self.t(cx + sp[1], cy + sp[2] - 10, sp[0], { size: 12, bold: true, origin: [0.5, 1] }).setBackgroundColor('#f1e6cc').setPadding(4, 1, 4, 1);
       });
       let mz = this.add2(this.add.zone(MAP.x, MAP.y + 34, MAP.w, MAP.h - 34).setOrigin(0, 0).setInteractive({ useHandCursor: true }));
-      mz.on('pointerup', function () { self.switchView(self.view === K.VILLAGE ? K.OFFICE : K.VILLAGE); });
+      // 누르면 항상 지역 화면으로 간다(이미 지역 화면이면 그대로). 관청으로 되돌아가지 않는다.
+      mz.on('pointerup', function () { if (self.view !== K.VILLAGE) self.switchView(K.VILLAGE); });
 
       // 조달 요청서 목록 (첫 버전은 1건. 잠긴 칸은 두지 않는다: 기획서 v0.8 3장)
       let sc = TYCOON.ui.SCENARIO.project;

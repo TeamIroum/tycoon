@@ -31,10 +31,15 @@
       };
       if (this.step === 0) {
         caption('강당의 밤', '맨바닥에서 자던 주민들이 매트와 침구 위에서 쉽니다.');
-        TYCOON.ui.art.drawHall(this, s, { ox: 330, oy: 300, bedded: false, lit: false, conditionKnown: true, clip: { x: 0, y: 92, w: 640, h: 500 } }).forEach(add);
-        TYCOON.ui.art.drawHall(this, s, { ox: 950, oy: 300, bedded: true, lit: true }).forEach(add);
-        add(TYCOON.ui.text(this, 330, 560, '전', { size: 16, bold: true, color: TYCOON.ui.THEME.css.lightMuted, origin: [0.5, 0] }));
-        add(TYCOON.ui.text(this, 950, 560, '후', { size: 16, bold: true, color: '#ffe066', origin: [0.5, 0] }));
+        // 개선 전 → 후를 한 화면에서 천천히 겹쳐 바꿔 보여 준다(팀원 2 art.drawHallDissolve). 강당 그림이 없으면 예전처럼 나란히 그린다.
+        let dissolve = TYCOON.ui.art.drawHallDissolve ? TYCOON.ui.art.drawHallDissolve(this, { label: { x: 640, y: 552 } }) : null;
+        if (dissolve) dissolve.forEach(add);
+        else {
+          TYCOON.ui.art.drawHall(this, s, { ox: 330, oy: 300, bedded: false, lit: false, conditionKnown: true, clip: { x: 0, y: 92, w: 640, h: 500 } }).forEach(add);
+          TYCOON.ui.art.drawHall(this, s, { ox: 950, oy: 300, bedded: true, lit: true }).forEach(add);
+          add(TYCOON.ui.text(this, 330, 560, '전', { size: 16, bold: true, color: TYCOON.ui.THEME.css.lightMuted, origin: [0.5, 0] }));
+          add(TYCOON.ui.text(this, 950, 560, '후', { size: 16, bold: true, color: '#ffe066', origin: [0.5, 0] }));
+        }
         TYCOON.ui.SCENARIO.residentReviews.forEach(function (rv, k) {
           add(TYCOON.ui.text(self, 640, 590 + k * 30, '주민 후기  ' + rv, { size: 14, origin: [0.5, 0] }).setBackgroundColor('#f1e6cc').setPadding(8, 3, 8, 3));
         });

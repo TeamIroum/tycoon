@@ -1,10 +1,11 @@
 /*
- * 임시 그래픽 (담당: 팀원 3. 관청 그림 drawOffice는 팀원 4와 공유)
+ * 월드 그래픽 (담당: 팀원 2)
  *
- * AI 생성 이미지 에셋이 준비되기 전까지 쓰는 도형 그래픽이다.
+ * - 배경 그림(src/config/assets.js의 BG_KEYS)이 불러와져 있으면 지역·관청·강당을 그 그림으로 그린다.
+ *   그림이 없거나 로드에 실패하면 아래 도형 그래픽으로 그린다(폴백).
  * - 쿼터뷰 타일 64×32, 모든 좌표는 2px 그리드(짝수)로 맞춘다(CLAUDE.md 6장).
  * - 인물은 발 위치를 기준점(origin 0.5, 1)으로 두고 깊이 = 바닥 y.
- * - 에셋이 들어오면 이 파일의 그리기 함수를 이미지 배치로 바꾼다.
+ * - 공개 함수의 이름·반환 형식은 API명세서 6-5를 따른다(다른 팀 Scene이 사용).
  */
 (function () {
   'use strict';
@@ -27,6 +28,154 @@
 
   function iso(i, j, ox, oy) { return { x: snap2(ox + (i - j) * 32), y: snap2(oy + (i + j) * 16) }; }
   TYCOON.ui.art.iso = iso;
+
+  // ---------- 배경 그림 ----------
+  // 키는 src/config/assets.js와 같다. 그림은 모두 1920×1080(화면 1280×720보다 크게)이며 아래 좌표도 그 기준이다.
+  // 관청·지역·강당 화면은 그림을 원래 크기로 깔고, 마우스가 가장자리에 가면 화면이 그쪽으로 움직인다(EDGE_SCROLL).
+  // 엔딩은 화면(또는 지정 영역)에 맞춰 줄여 보여 준다.
+  let BG_KEYS = { region: 'bg_region', office: 'bg_office', hallBefore: 'bg_hall_before', hallAfter: 'bg_hall_after' };
+  TYCOON.ui.art.BG_KEYS = BG_KEYS;
+  let BG_W = 1920, BG_H = 1080;
+
+  // 그림 위 위치 (1920×1080 기준, 눈금 그림으로 잰 값)
+  let IMAGE_LAYOUT = {
+    region: {
+      // hit 좌표: VillageScene이 (x-84, y-60, 168×132) 클릭 영역, 학당은 (x, y-92)에 검사 표식을 둔다.
+      buildings: {
+        office: { x: 976, y: 226 },     // 지방조달청
+        hall: { x: 510, y: 394 },       // 학당
+        market: { x: 1336, y: 780 },    // 장터
+        workshop: { x: 196, y: 606 },   // 공급기업(침구 공방)
+        supply: { x: 1834, y: 900 },    // 강 건너
+        clinic: { x: 1288, y: 568 },    // 의원 (그림에만 있는 건물)
+        library: { x: 1614, y: 474 }    // 도서관 (그림에만 있는 건물)
+      },
+      // 그림에만 있는 건물(도형 지도에는 없음). 간판이 그려져 있어 이름표는 달지 않는다.
+      extra: [
+        { id: 'clinic', name: '의원', role: '마을 의원', noLabel: true },
+        { id: 'library', name: '도서관', role: '마을 도서관', noLabel: true }
+      ],
+      // 납품 트럭: 학당 앞까지
+      truck: { from: { x: 960, y: 630 }, to: { x: 646, y: 474 } }
+    },
+    office: { seat2: { x: 1114, y: 576 }, door: { x: 496, y: 678 } },
+    // 개선 후 강당 그림에서 매트 위 주민 머리 위치
+    hallHeads: [{ x: 1158, y: 468 }, { x: 1248, y: 508 }, { x: 1308, y: 526 }, { x: 1300, y: 370 }, { x: 1438, y: 436 }, { x: 1546, y: 492 }, { x: 1608, y: 528 }]
+  };
+  TYCOON.ui.art.IMAGE_LAYOUT = IMAGE_LAYOUT;
+
+  function hasBg(scene, key) { return !!(scene && scene.textures && scene.textures.exists(key)); }
+  TYCOON.ui.art.hasBg = hasBg;
+
+  function isEnding(scene) {
+    let K = TYCOON.config && TYCOON.config.SCENE_KEYS;
+    return !!(K && scene.scene && scene.scene.key === K.ENDING);
+  }
+
+  // 줄여 볼 때(배율 < 1)는 부드럽게, 원래 크기 이상으로 볼 때는 도트가 또렷하게(최근접) 그린다.
+  // (게임 설정 pixelArt라 기본은 최근접이고, 1920 그림을 0.67배로 줄이면 픽셀 줄이 빠져 깨져 보인다.)
+  function setBgFilter(scene, key, zoom) {
+    let tex = scene.textures.get(key);
+    if (tex && tex.setFilter) tex.setFilter(zoom < 0.999 ? Phaser.Textures.FilterMode.LINEAR : Phaser.Textures.FilterMode.NEAREST);
+  }
+
+  // rect 안에 비율을 지켜 맞춘다(contain). 반환: { img, s, x, y, w, h } — 그림 좌표 (px, py) → 화면 (x + px*s, y + py*s)
+  function placeBg(scene, key, rect) {
+    let s = Math.min(rect.w / BG_W, rect.h / BG_H);
+    setBgFilter(scene, key, s);
+    let x = snap2(rect.x + (rect.w - BG_W * s) / 2), y = snap2(rect.y + (rect.h - BG_H * s) / 2);
+    // 배경은 항상 맨 아래(-10): 엔딩처럼 배경보다 먼저 만든 제목 상자 등을 가리지 않게 한다.
+    let img = scene.add.image(x, y, key).setOrigin(0, 0).setScale(s).setDepth(-10);
+    return { img: img, s: s, x: x, y: y, w: BG_W * s, h: BG_H * s };
+  }
+  TYCOON.ui.art.placeBg = placeBg;
+
+  // ---------- 화면 이동·확대 (월드 화면 카메라) ----------
+  // 가장자리 이동: 화면 가장자리 zone(25%) 안에 마우스가 있으면 그 방향으로 1초에 화면 크기의 speed(30%)만큼 움직인다.
+  //   (확대해도 화면 기준 속도는 같다.)
+  // 확대·축소: 마우스 휠로만(마우스가 가리키는 곳을 중심으로). 화면을 열면 처음에는 그림 전체가 화면에 딱 맞는 배율(맞춤)로 시작하고,
+  // 그보다 작게는 줄어들지 않으며 가장 크게 ZOOM.max배까지 확대된다.
+  // 마우스가 UI의 누를 수 있는 것(버튼·요청서·대화창 등) 위에 있거나 게임 화면 밖이면 동작하지 않는다.
+  // 좌표 규칙(Phaser 카메라, 원점 = 화면 가운데): 화면 = (세계 - scroll - 화면/2) × zoom + 화면/2
+  let EDGE_SCROLL = { zone: 0.25, speed: 0.30 };
+  let ZOOM = { max: 2, wheel: 1.0015 };   // 휠 한 칸(deltaY 약 100) ≈ 1.16배
+  TYCOON.ui.art.EDGE_SCROLL = EDGE_SCROLL;
+  TYCOON.ui.art.ZOOM = ZOOM;
+
+  function worldToScreen(cam, x, y) {
+    return { x: (x - cam.scrollX - cam.width / 2) * cam.zoom + cam.width / 2, y: (y - cam.scrollY - cam.height / 2) * cam.zoom + cam.height / 2 };
+  }
+  TYCOON.ui.art.worldToScreen = worldToScreen;
+
+  function clampCam(cam) { cam.scrollX = cam.clampX(cam.scrollX); cam.scrollY = cam.clampY(cam.scrollY); }
+
+  // 화면 점 (sx, sy) 아래의 세계 점이 그 자리에 머물도록 배율을 z로 바꾼다.
+  function zoomAt(cam, z, sx, sy, minZ) {
+    z = Math.max(minZ, Math.min(ZOOM.max, z));
+    let w = cam.width, h = cam.height, z0 = cam.zoom;
+    let wx = (sx - w / 2) / z0 + w / 2 + cam.scrollX, wy = (sy - h / 2) / z0 + h / 2 + cam.scrollY;
+    cam.setZoom(z);
+    cam.scrollX = wx - (sx - w / 2) / z - w / 2;
+    cam.scrollY = wy - (sy - h / 2) / z - h / 2;
+    clampCam(cam);
+  }
+
+  function uiScene(scene) {
+    let ui = scene.scene.get(TYCOON.config.SCENE_KEYS.UI);
+    return ui && ui.sys.isActive() ? ui : null;
+  }
+  function pointerOnUi(scene, p) { let ui = uiScene(scene); return !!(ui && ui.input.hitTestPointer(p).length); }
+
+  function ensureWorldCamera(scene, w, h) {
+    let cam = scene.cameras.main;
+    cam.setBounds(0, 0, w, h);
+    if (scene.__worldCam) return;
+    scene.__worldCam = true;
+    let minZ = Math.max(cam.width / w, cam.height / h);
+    let filters = function () { (scene.__bgKeys || []).forEach(function (k) { setBgFilter(scene, k, cam.zoom); }); };
+    // 처음에는 맞춤(그림 전체가 화면에 딱 맞는 배율)
+    cam.setZoom(minZ);
+    cam.centerOn(w / 2, h / 2);
+    clampCam(cam);
+    filters();
+    let onUpdate = function (time, dt) {
+      let p = scene.input.activePointer, gi = scene.sys.game.input;
+      // 마우스를 한 번도 움직이지 않았으면 위치가 (0, 0)으로 남아 있어 왼쪽 위로 흘러가므로 움직인 뒤부터만 동작한다.
+      if (!p || !gi.isOver || !(p.moveTime > 0) || pointerOnUi(scene, p)) return;
+      let vw = cam.width, vh = cam.height, zx = vw * EDGE_SCROLL.zone, zy = vh * EDGE_SCROLL.zone;
+      let dx = p.x < zx ? -1 : p.x > vw - zx ? 1 : 0;
+      let dy = p.y < zy ? -1 : p.y > vh - zy ? 1 : 0;
+      if (!dx && !dy) return;
+      cam.scrollX += dx * vw * EDGE_SCROLL.speed * dt / 1000 / cam.zoom;
+      cam.scrollY += dy * vh * EDGE_SCROLL.speed * dt / 1000 / cam.zoom;
+      clampCam(cam);
+    };
+    let onWheel = function (pointer, over, deltaX, deltaY) {
+      if (!deltaY || pointerOnUi(scene, pointer)) return;
+      zoomAt(cam, cam.zoom * Math.pow(ZOOM.wheel, -deltaY), pointer.x, pointer.y, minZ);
+      filters();
+    };
+    scene.input.on('wheel', onWheel);
+    scene.events.on('update', onUpdate);
+    scene.events.once('shutdown', function () {
+      scene.events.off('update', onUpdate);
+      scene.input.off('wheel', onWheel);
+      scene.__worldCam = false;
+    });
+  }
+  TYCOON.ui.art.ensureWorldCamera = ensureWorldCamera;
+
+  // 월드 화면 배경: 엔딩이면 화면에 맞추고, 아니면 원래 크기로 깔고 화면 이동·확대를 켠다.
+  function placeWorld(scene, key) {
+    if (isEnding(scene)) return placeBg(scene, key, { x: 0, y: 0, w: 1280, h: 720 });
+    let img = scene.add.image(0, 0, key).setOrigin(0, 0).setDepth(-10);
+    scene.__bgKeys = scene.__bgKeys || [];
+    if (scene.__bgKeys.indexOf(key) < 0) scene.__bgKeys.push(key);
+    ensureWorldCamera(scene, BG_W, BG_H);
+    setBgFilter(scene, key, scene.cameras.main.zoom);
+    return { img: img, s: 1, x: 0, y: 0, w: BG_W, h: BG_H };
+  }
+  function at(p, pt) { return { x: snap2(p.x + pt.x * p.s), y: snap2(p.y + pt.y * p.s) }; }
 
   function diamond(g, ox, oy, i, j, wi, wj, color, alpha) {
     let a = iso(i, j, ox, oy), b = iso(i + wi, j, ox, oy), c = iso(i + wi, j + wj, ox, oy), d = iso(i, j + wj, ox, oy);
@@ -97,11 +246,15 @@
 
   function hex(c) { return parseInt(c.slice(1), 16); }
 
+  // 사람은 화면에 그리지 않는다(팀원 2 결정). 텍스처 키와 크기는 다른 Scene·테스트가 쓰므로 그대로 두고 빈 그림으로 만든다.
+  // 다시 보이게 하려면 SHOW_PEOPLE = true.
+  TYCOON.ui.art.SHOW_PEOPLE = false;
+
   function makePerson(scene, key, pal) {
     function frame(name, w, h, draw) {
       let g = scene.make.graphics({ x: 0, y: 0, add: false });
       let px = function (x, y, ww, hh, col) { g.fillStyle(hex(col), 1); g.fillRect(x * 2, y * 2, ww * 2, hh * 2); };
-      draw(px);
+      if (TYCOON.ui.art.SHOW_PEOPLE) draw(px);
       g.generateTexture(key + '_' + name, w * 2, h * 2);
       g.destroy();
     }
@@ -138,10 +291,22 @@
     px(3, 11, 4, 3, 0x1c1c1c); px(15, 11, 4, 3, 0x1c1c1c);
     g.generateTexture('truck', 44, 28);
     g.destroy();
+    // 하트 (아트 7×6): 개선 후 강당에서 주민 머리 위에 띄운다
+    let h = scene.make.graphics({ x: 0, y: 0, add: false });
+    let hp = function (x, y, w, hh, col) { h.fillStyle(col, 1); h.fillRect(x * 2, y * 2, w * 2, hh * 2); };
+    hp(1, 0, 2, 1, 0xe8505b); hp(4, 0, 2, 1, 0xe8505b);
+    hp(0, 1, 7, 2, 0xe8505b); hp(1, 3, 5, 1, 0xe8505b); hp(2, 4, 3, 1, 0xe8505b); hp(3, 5, 1, 1, 0xe8505b);
+    hp(1, 1, 1, 1, 0xffc2c7);
+    h.generateTexture('fx_heart', 14, 12);
+    h.destroy();
   };
 
   // ---------- 걷는 인물 ----------
   // 경로를 따라 이동하며 두 프레임을 번갈아 보여준다. 좌표는 짝수로 맞춘다.
+  // 사람은 걸어 다니지 않는다(팀원 2 결정, PEOPLE_WALK = false). 사람 Walker는 경로 끝에 바로 놓이고,
+  // 도착 처리(onArrive)는 첫 update에서 한 번 부른다(관청 동료는 바로 자리에 앉는다).
+  // 트럭처럼 texture를 준 이동체는 그대로 움직인다.
+  TYCOON.ui.art.PEOPLE_WALK = false;
   class Walker {
     constructor(scene, key, points, opts) {
       opts = opts || {};
@@ -154,9 +319,18 @@
       this.fixed = opts.texture || null;
       this.sprite = scene.add.image(snap2(this.fx), snap2(this.fy), this.fixed || key + '_stand').setOrigin(0.5, 1);
       this.sprite.setDepth(this.fy);
+      this.arrivePending = false;
+      if (!this.fixed && !TYCOON.ui.art.PEOPLE_WALK) {
+        let last = points[points.length - 1];
+        this.fx = last.x; this.fy = last.y;
+        this.sprite.setPosition(snap2(last.x), snap2(last.y)).setDepth(last.y);
+        this.done = true;
+        this.arrivePending = !!this.onArrive;
+      }
     }
 
     update(dt) {
+      if (this.arrivePending) { this.arrivePending = false; this.onArrive(this); return; }
       if (this.done) return;
       let a = this.points[this.index];
       let nextIndex = this.index + 1;
@@ -181,9 +355,73 @@
   TYCOON.ui.art.Walker = Walker;
 
   // ---------- 강당 ----------
-  // opts: { bedded, lit, conditionKnown, ox, oy, cols, rows, label }
+  // 그림을 놓을 영역: opts.rect → opts.clip → 엔딩 '전·후' 비교면 왼쪽(ox<640)·오른쪽 절반 → 없으면(null) 월드 화면(원래 크기 + 가장자리 이동)
+  function hallRect(scene, opts) {
+    if (opts.rect) return opts.rect;
+    if (opts.clip) return opts.clip;
+    if (isEnding(scene)) return opts.ox < 640 ? { x: 0, y: 92, w: 640, h: 500 } : { x: 640, y: 92, w: 640, h: 500 };
+    return null;
+  }
+
+  // 배경 그림 강당: 개선 전(어둡게) / 개선 후(하트). opts.hearts === false면 정지 하트를 그리지 않는다(HallScene이 움직이는 하트를 띄움).
+  function drawHallImage(scene, key, opts) {
+    let r = hallRect(scene, opts);
+    let p = r ? placeBg(scene, key, r) : placeWorld(scene, key);
+    let objs = [p.img];
+    if (!opts.lit) {
+      let dark = scene.add.graphics();
+      dark.fillStyle(0x0b1222, 0.4);
+      dark.fillRect(p.x, p.y, p.w, p.h);
+      dark.setDepth(5000);
+      objs.push(dark);
+    } else if (opts.hearts !== false) {
+      IMAGE_LAYOUT.hallHeads.forEach(function (hd, k) {
+        if (k % 2) return;
+        objs.push(scene.add.image(snap2(p.x + hd.x * p.s), snap2(p.y + (hd.y - 22) * p.s), 'fx_heart').setOrigin(0.5, 1).setDepth(4900));
+      });
+    }
+    return objs;
+  }
+
+  // 엔딩 '강당의 밤': 개선 전(어두운 밤) 강당을 화면 가득 보여 준 뒤, 개선 후 강당으로 천천히 겹쳐 바뀐다(디졸브).
+  // opts: { delay(ms, 기본 1200), duration(ms, 기본 1800), label: { x, y } } — label이 있으면 가운데 표시가 '전' → '후'로 바뀐다.
+  // 반환: 표시 객체 배열. 강당 그림이 없으면 null(호출하는 쪽이 예전처럼 나란히 그린다).
+  TYCOON.ui.art.drawHallDissolve = function (scene, opts) {
+    opts = opts || {};
+    if (!hasBg(scene, BG_KEYS.hallBefore) || !hasBg(scene, BG_KEYS.hallAfter)) return null;
+    let rect = { x: 0, y: 0, w: 1280, h: 720 };
+    let before = placeBg(scene, BG_KEYS.hallBefore, rect);
+    let dark = scene.add.graphics().setDepth(-9);
+    dark.fillStyle(0x0b1222, 0.45); dark.fillRect(before.x, before.y, before.w, before.h);
+    let after = placeBg(scene, BG_KEYS.hallAfter, rect);
+    after.img.setDepth(-8).setAlpha(0);
+    let hearts = IMAGE_LAYOUT.hallHeads.filter(function (hd, k) { return k % 2 === 0; }).map(function (hd) {
+      return scene.add.image(snap2(after.x + hd.x * after.s), snap2(after.y + (hd.y - 22) * after.s), 'fx_heart').setOrigin(0.5, 1).setDepth(-7).setAlpha(0);
+    });
+    let objs = [before.img, dark, after.img].concat(hearts);
+    let label = null;
+    if (opts.label) {
+      label = TYCOON.ui.text(scene, opts.label.x, opts.label.y, '전', { size: 18, bold: true, color: '#c9c0aa', origin: [0.5, 0], stroke: '#0f1628', strokeThickness: 5 });
+      objs.push(label);
+    }
+    let delay = opts.delay === undefined ? 1200 : opts.delay, dur = opts.duration || 1800;
+    let fadeIn = [after.img].concat(hearts);
+    scene.tweens.add({ targets: fadeIn, alpha: 1, delay: delay, duration: dur, ease: 'Sine.easeInOut' });
+    scene.tweens.add({ targets: dark, alpha: 0, delay: delay, duration: dur, ease: 'Sine.easeInOut' });
+    let swap = label ? scene.time.delayedCall(delay + dur / 2, function () { if (label.scene) label.setText('후').setColor('#ffe066'); }) : null;
+    // 장면이 넘어가 지워지면 남은 애니메이션·예약을 멈춘다
+    after.img.once('destroy', function () {
+      scene.tweens.killTweensOf(fadeIn.concat([dark]));
+      if (swap) swap.remove(false);
+    });
+    return objs;
+  };
+
+  // opts: { bedded, lit, conditionKnown, ox, oy, cols, rows, label, clip, rect, hearts }
   TYCOON.ui.art.drawHall = function (scene, state, opts) {
     opts = opts || {};
+    let bgKey = (opts.bedded || opts.lit) ? BG_KEYS.hallAfter : BG_KEYS.hallBefore;
+    if (hasBg(scene, bgKey)) return drawHallImage(scene, bgKey, opts);
     let ox = opts.ox, oy = opts.oy, cols = opts.cols || 8, rows = opts.rows || 6;
     let objs = [];
     let g = scene.add.graphics(); objs.push(g);
@@ -237,6 +475,12 @@
 
   // ---------- 관청 내부 ----------
   TYCOON.ui.art.drawOffice = function (scene, state, opts) {
+    if (hasBg(scene, BG_KEYS.office)) {
+      // 배경 그림 관청: 화면 전체. 사람은 그리지 않는다. seat2는 두 번째 업무석 좌표(OfficeScene·EndingScene이 사용)
+      let L = IMAGE_LAYOUT.office;
+      let pb = placeWorld(scene, BG_KEYS.office);
+      return { objs: [pb.img], seat2: at(pb, L.seat2), door: at(pb, L.door), d1: null, d2: null };
+    }
     let ox = opts.ox, oy = opts.oy, cols = 8, rows = 6;
     let g = scene.add.graphics();
     let wallH = 104;
@@ -299,6 +543,23 @@
   TYCOON.ui.art.REGION_BUILDINGS = REGION_BUILDINGS;
 
   TYCOON.ui.art.drawRegion = function (scene, state, opts) {
+    if (hasBg(scene, BG_KEYS.region)) {
+      // 배경 그림 지역: 화면 전체. hit 형식은 도형 그림과 같다({ def, x, y }, 'hall' 필수).
+      let pr = placeWorld(scene, BG_KEYS.region);
+      let objsI = [pr.img], hitI = [];
+      REGION_BUILDINGS.concat(IMAGE_LAYOUT.region.extra).forEach(function (b) {
+        let src = IMAGE_LAYOUT.region.buildings[b.id];
+        if (!src) return;
+        let pos = at(pr, src);
+        if (!b.noLabel) {
+          let label = TYCOON.ui.text(scene, pos.x, pos.y - 56 * pr.s, b.name, { size: 12, origin: [0.5, 1], color: '#f4ecd8' });
+          label.setBackgroundColor('#1e2b47cc').setPadding(6, 3, 6, 3).setDepth(4000);
+          objsI.push(label);
+        }
+        hitI.push({ def: b, x: pos.x, y: pos.y });
+      });
+      return { objs: objsI, hit: hitI };
+    }
     let ox = opts.ox, oy = opts.oy, cols = 15, rows = 10;
     let g = scene.add.graphics();
     for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
@@ -344,5 +605,15 @@
       [iso(2, 9.4, ox, oy), iso(8, 9.4, ox, oy)],
       [iso(9.4, 2, ox, oy), iso(9.4, 8, ox, oy)]
     ];
+  };
+
+  // 지역 화면 배치: 납품 트럭 경로(월드 좌표). 배경 그림이 있으면 그림 기준, 없으면 도형 지도 기준.
+  TYCOON.ui.art.regionLayout = function (scene, ox, oy) {
+    let copy = function (p) { return { x: p.x, y: p.y }; };
+    if (hasBg(scene, BG_KEYS.region)) {
+      let R = IMAGE_LAYOUT.region;
+      return { paths: [], truck: { from: copy(R.truck.from), to: copy(R.truck.to) } };
+    }
+    return { paths: TYCOON.ui.art.regionPaths(ox, oy), truck: { from: iso(7.4, 9.4, ox, oy), to: iso(3.8, 9.4, ox, oy) } };
   };
 })();

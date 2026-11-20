@@ -23,8 +23,10 @@
       [K.OFFICE, K.VILLAGE, K.HALL, K.UI, K.ENDING].forEach((key) => {
         if (this.scene.isActive(key) || this.scene.isPaused(key) || this.scene.isSleeping(key)) this.scene.stop(key);
       });
-      this.add.text(GAME_WIDTH / 2, 240, '조달청 타이쿤', { fontFamily: FONT, fontSize: '48px', color: '#efe7d2' }).setOrigin(0.5);
-      this.add.text(GAME_WIDTH / 2, 304, '조달 업무로 마을의 시설을 되살리는 경영 시뮬레이션', { fontFamily: FONT, fontSize: '18px', color: '#c9c0aa' }).setOrigin(0.5);
+      // 타이틀 배경 그림(팀원 2 에셋 bg_title). 불러오지 못하면 기존 단색 배경 그대로. 글자는 그림 위에서 읽히도록 테두리를 둔다.
+      if (this.textures.exists('bg_title')) this.add.image(0, 0, 'bg_title').setOrigin(0);
+      this.add.text(GAME_WIDTH / 2, 240, '조달청 타이쿤', { fontFamily: FONT, fontSize: '48px', color: '#efe7d2', stroke: '#0f1628', strokeThickness: 8 }).setOrigin(0.5);
+      this.add.text(GAME_WIDTH / 2, 304, '조달 업무로 마을의 시설을 되살리는 경영 시뮬레이션', { fontFamily: FONT, fontSize: '18px', color: '#efe7d2', stroke: '#0f1628', strokeThickness: 5 }).setOrigin(0.5);
       this.startButton(() => {
         TYCOON.app.flow.newGame();
         TYCOON.app.pendingEvents = ['GAME_STARTED'];
