@@ -58,7 +58,10 @@
       // 납품 트럭: 학당 앞까지
       truck: { from: { x: 960, y: 630 }, to: { x: 646, y: 474 } }
     },
-    office: { seat2: { x: 1114, y: 576 }, door: { x: 496, y: 678 } },
+    // endingView: 엔딩에서 관청을 원래 크기(1배)로 보여 줄 때 그림의 왼쪽 위 화면 위치(동료 그림과 비율을 맞추려고 줄이지 않음)
+    office: { seat2: { x: 1114, y: 576 }, door: { x: 496, y: 678 }, endingView: { x: -210, y: -160 } },
+    // 개선 전 강당 바닥 매트 덮개(왼쪽 위), 점검 뒤 젖은 세트(왼쪽 위)와 그 위 물방울(아래 가운데)
+    hallMats: { x: 1012, y: 446, wet: { x: 1282, y: 606 }, drops: [{ x: 1360, y: 618 }, { x: 1420, y: 618 }] },
     // 개선 후 강당 그림에서 매트 위 주민 머리 위치
     hallHeads: [{ x: 1158, y: 468 }, { x: 1248, y: 508 }, { x: 1308, y: 526 }, { x: 1300, y: 370 }, { x: 1438, y: 436 }, { x: 1546, y: 492 }, { x: 1608, y: 528 }]
   };
@@ -89,6 +92,41 @@
     return { img: img, s: s, x: x, y: y, w: BG_W * s, h: BG_H * s };
   }
   TYCOON.ui.art.placeBg = placeBg;
+
+  // 배율 s로 화면 (x, y)에 그림의 왼쪽 위를 맞춰 놓는다(맞춤 없이).
+  function placeBgAt(scene, key, s, x, y) {
+    setBgFilter(scene, key, s);
+    let img = scene.add.image(x, y, key).setOrigin(0, 0).setScale(s).setDepth(-10);
+    return { img: img, s: s, x: x, y: y, w: BG_W * s, h: BG_H * s };
+  }
+
+  // 배경과 같은 좌표·배율로 덧그림(그림 좌표 x, y가 왼쪽 위). 월드 화면이면 확대·축소에 맞춰 그리기 방식도 함께 바뀐다.
+  function overlay(scene, p, key, x, y, depth) {
+    if (!hasBg(scene, key)) return null;
+    let o = scene.add.image(p.x + x * p.s, p.y + y * p.s, key).setOrigin(0, 0).setScale(p.s).setDepth(depth);
+    if (p.world) {
+      scene.__bgKeys = scene.__bgKeys || [];
+      if (scene.__bgKeys.indexOf(key) < 0) scene.__bgKeys.push(key);
+      setBgFilter(scene, key, scene.cameras.main.zoom);
+    } else setBgFilter(scene, key, p.s);
+    return o;
+  }
+
+  // 개선 전 강당 바닥의 매트 8장(세트 4개). wetKnown(매트 상태 점검)이면 젖은 2장(세트 1개)을 젖은 그림으로 덮고 물방울을 띄운다.
+  // d: { mats, wet, drops } 깊이
+  function addHallMats(scene, p, wetKnown, d) {
+    let M = IMAGE_LAYOUT.hallMats, out = [];
+    let m = overlay(scene, p, 'bg_hall_mats', M.x, M.y, d.mats);
+    if (m) out.push(m);
+    if (wetKnown) {
+      let w = overlay(scene, p, 'bg_hall_mats_wet', M.wet.x, M.wet.y, d.wet);
+      if (w) out.push(w);
+      if (scene.textures.exists('emote_wet')) M.drops.forEach(function (pt) {
+        out.push(scene.add.image(snap2(p.x + pt.x * p.s), snap2(p.y + pt.y * p.s), 'emote_wet').setOrigin(0.5, 1).setDepth(d.drops));
+      });
+    }
+    return out;
+  }
 
   // ---------- 화면 이동·확대 (월드 화면 카메라) ----------
   // 가장자리 이동: 화면 가장자리 zone(25%) 안에 마우스가 있으면 그 방향으로 1초에 화면 크기의 speed(30%)만큼 움직인다.
@@ -173,7 +211,7 @@
     if (scene.__bgKeys.indexOf(key) < 0) scene.__bgKeys.push(key);
     ensureWorldCamera(scene, BG_W, BG_H);
     setBgFilter(scene, key, scene.cameras.main.zoom);
-    return { img: img, s: 1, x: 0, y: 0, w: BG_W, h: BG_H };
+    return { img: img, s: 1, x: 0, y: 0, w: BG_W, h: BG_H, world: true };
   }
   function at(p, pt) { return { x: snap2(p.x + pt.x * p.s), y: snap2(p.y + pt.y * p.s) }; }
 
@@ -368,6 +406,8 @@
     let r = hallRect(scene, opts);
     let p = r ? placeBg(scene, key, r) : placeWorld(scene, key);
     let objs = [p.img];
+    // 개선 전: 바닥 매트, 점검 뒤 젖은 매트·물방울(물방울은 밤의 어두운 막 위에 둬서 잘 보이게)
+    if (!(opts.bedded || opts.lit)) objs = objs.concat(addHallMats(scene, p, !!opts.conditionKnown, { mats: -5, wet: -4, drops: 5001 }));
     if (!opts.lit) {
       let dark = scene.add.graphics();
       dark.fillStyle(0x0b1222, 0.4);
@@ -384,13 +424,16 @@
   }
 
   // 엔딩 '강당의 밤': 개선 전(어두운 밤) 강당을 화면 가득 보여 준 뒤, 개선 후 강당으로 천천히 겹쳐 바뀐다(디졸브).
-  // opts: { delay(ms, 기본 1200), duration(ms, 기본 1800), label: { x, y } } — label이 있으면 가운데 표시가 '전' → '후'로 바뀐다.
+  // opts: { delay(ms, 기본 1200), duration(ms, 기본 1800), label: { x, y }, conditionKnown(기본 true) }
+  //   label이 있으면 가운데 표시가 '전' → '후'로 바뀐다. conditionKnown이면 '전' 장면에 젖은 매트도 보인다.
   // 반환: 표시 객체 배열. 강당 그림이 없으면 null(호출하는 쪽이 예전처럼 나란히 그린다).
   TYCOON.ui.art.drawHallDissolve = function (scene, opts) {
     opts = opts || {};
     if (!hasBg(scene, BG_KEYS.hallBefore) || !hasBg(scene, BG_KEYS.hallAfter)) return null;
     let rect = { x: 0, y: 0, w: 1280, h: 720 };
     let before = placeBg(scene, BG_KEYS.hallBefore, rect);
+    // 개선 전 바닥 매트(젖은 매트 포함). 깊이: 배경 -10 < 매트 < 어두운 막 -9 < 물방울 < 개선 후 -8 (개선 후가 나타나며 모두 덮는다)
+    let mats = addHallMats(scene, before, opts.conditionKnown !== false, { mats: -9.6, wet: -9.5, drops: -8.9 });
     let dark = scene.add.graphics().setDepth(-9);
     dark.fillStyle(0x0b1222, 0.45); dark.fillRect(before.x, before.y, before.w, before.h);
     let after = placeBg(scene, BG_KEYS.hallAfter, rect);
@@ -398,7 +441,7 @@
     let hearts = IMAGE_LAYOUT.hallHeads.filter(function (hd, k) { return k % 2 === 0; }).map(function (hd) {
       return scene.add.image(snap2(after.x + hd.x * after.s), snap2(after.y + (hd.y - 22) * after.s), 'fx_heart').setOrigin(0.5, 1).setDepth(-7).setAlpha(0);
     });
-    let objs = [before.img, dark, after.img].concat(hearts);
+    let objs = [before.img].concat(mats, [dark, after.img], hearts);
     let label = null;
     if (opts.label) {
       label = TYCOON.ui.text(scene, opts.label.x, opts.label.y, '전', { size: 18, bold: true, color: '#c9c0aa', origin: [0.5, 0], stroke: '#0f1628', strokeThickness: 5 });
@@ -478,8 +521,14 @@
     if (hasBg(scene, BG_KEYS.office)) {
       // 배경 그림 관청: 화면 전체. 사람은 그리지 않는다. seat2는 두 번째 업무석 좌표(OfficeScene·EndingScene이 사용)
       let L = IMAGE_LAYOUT.office;
-      let pb = placeWorld(scene, BG_KEYS.office);
-      return { objs: [pb.img], seat2: at(pb, L.seat2), door: at(pb, L.door), d1: null, d2: null };
+      // 엔딩은 원래 크기로 사무실 가운데를 보여 준다(EndingScene이 동료 그림을 원래 크기로 붙이므로 비율을 맞춤)
+      let pb = isEnding(scene) ? placeBgAt(scene, BG_KEYS.office, 1, L.endingView.x, L.endingView.y) : placeWorld(scene, BG_KEYS.office);
+      let seat2 = at(pb, L.seat2), objsO = [pb.img];
+      // 채용한 동료는 사용자 그림(art_colleague_seat)으로 두 번째 업무석에 앉힌다. OfficeScene·EndingScene이 붙이는 colleague_sit은 빈 임시 텍스처라 겹쳐도 보이지 않는다.
+      if (state && state.staff && state.staff.hired && hasBg(scene, 'art_colleague_seat')) {
+        objsO.push(scene.add.image(seat2.x, seat2.y, 'art_colleague_seat').setOrigin(0.5, 1).setScale(pb.s).setDepth(seat2.y + 1));
+      }
+      return { objs: objsO, seat2: seat2, door: at(pb, L.door), d1: null, d2: null };
     }
     let ox = opts.ox, oy = opts.oy, cols = 8, rows = 6;
     let g = scene.add.graphics();
